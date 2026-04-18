@@ -65,10 +65,10 @@ class BridgeConfig:
     opus_signal_voice: int = 3001
 
     opus_frame_ms: int = 20
-    opus_target_bitrate: int = 12000
-    opus_encoder_complexity: int = 5
-    opus_expected_packet_loss_perc: int = 8
-    opus_use_vbr: int = 0
+    opus_target_bitrate: int = 20000
+    opus_encoder_complexity: int = 8
+    opus_expected_packet_loss_perc: int = 3
+    opus_use_vbr: int = 1
     opus_use_inband_fec: int = 1
 
     # UDP output pacing toward ESP32
