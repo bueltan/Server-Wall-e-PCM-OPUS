@@ -100,6 +100,56 @@ Referencias oficiales:
 - [Realtime: formatos, VAD y recorte del historial](https://developers.openai.com/api/reference/resources/realtime/client-events).
 - [Conexión WebSocket](https://developers.openai.com/api/docs/guides/realtime-websocket).
 
+## Pacing de salida y redes variables
+
+La salida Opus usa `AudioPacer` (`src/bridge/pacing.py`) con plazos absolutos del
+reloj monotónico `asyncio.loop.time()`. Codificación y preparación UDP quedan
+incluidas en el intervalo nominal de 20 ms: no se añade una espera fija de 20 ms
+tras cada frame. Esto evita la deriva observada de unos 45 frames/s frente a los
+50 frames/s que consume CORE.
+
+El estado del pacer se reinicia por respuesta/cancelación. Antes de enviar un
+frame después de una espera se vuelve a validar su identidad y el pacer vigente.
+Un retraso mayor que `output_pacing_max_lag_sec=0.04` reajusta el calendario;
+los pequeños atrasos se compensan con separación mínima de medio intervalo
+(10 ms por defecto). No se salta audio ni se retransmite Opus, ni se descarga de
+inmediato toda la deuda de tiempo en una ráfaga. Una fuente o CPU sostenidamente
+más lenta que tiempo real aún puede causar cortes: el pacer no crea audio faltante.
+
+`OUTPUT_PACING_STATS` cada cinco segundos y `OUTPUT_PACING` al finalizar informan
+frames, span_ms, fps, rebases y max_late_ms. Son métricas de envíos locales, no de
+llegada a CORE. Con audio disponible y procesamiento inferior a 20 ms se espera
+aproximadamente 50 fps. El backend sigue usando las colas limitadas existentes.
+
+La red se trata como variable, con jitter, reordenamiento y pérdidas aisladas o
+en ráfaga. Se conservan el búfer inicial de CORE de 1 s y rebuffer de 800 ms;
+aumentarlos no corrige deriva de envío y añade latencia. El heartbeat y el fin
+explícito por END permanecen separados del pacing; perder END puede terminar en
+cancelación por stall en CORE, no en una falsa reproducción completa.
+
+La recuperación uplink sigue acotada: caché CORE 12 frames / TTL 240 ms,
+reordenamiento backend 40 ms y espera de recuperación 120 ms. Un presupuesto
+simplificado, con pérdida seguida del siguiente frame a los 20 ms, muestra:
+
+| Ida / vuelta de la red (hipótesis) | Edad al llegar NACK a CORE | Caché disponible | Retransmisión dentro de 120 ms |
+|---|---:|---|---|
+| 20 / 20 ms | 100 ms | Sí | Sí |
+| 80 / 80 ms | 220 ms | Al límite | No |
+| 140 / 145 ms | 345 ms | No | No |
+
+Es un análisis de límites, no una medición de RTT del VPS. No cambia caché ni
+esperas de producción. Para ampliarlas hay que medir CORE↔VPS y equilibrar RAM,
+latencia y obsolescencia del audio; sin recuperación se conserva silencio limitado.
+Un ping corto a Google desde una PC no determina pérdida UDP de CORE al VPS.
+
+Las pruebas offline incluyen 30 s de pacing con procesamiento simulado de 2 ms,
+Opus real con reloj simulado, pausas y atrasos del scheduler, cancelación durante
+la espera, jitter de 20–140 ms, reordenamiento, pérdidas aisladas/en ráfaga y
+ACK retrasado con primera transmisión perdida. Las ventanas finitas pueden
+descartar paquetes tardíos: no se garantiza audio continuo bajo cualquier red.
+Estas simulaciones no ejecutan la reproducción física de CORE ni sustituyen la
+prueba integrada en Wi-Fi real.
+
 ## Logs para pruebas integradas
 
 El entrypoint habilita logs INFO con fecha UTC, IDs CORE y response_id de xAI.
@@ -113,15 +163,15 @@ Ver [captura e interpretación](DIAGNOSTICOS_TEST_INTEGRADO.md).
 .venv/bin/python -m unittest discover -s tests -v
 ```
 
-54 pruebas locales (incluyen v3 y regresiones legacy): serialización, codecs/grabaciones, colas/reordenamiento,
+64 pruebas locales (incluyen v3 y regresiones legacy): serialización, codecs/grabaciones, colas/reordenamiento,
 controles duplicados, aislamiento de IDs, recuperación, silencio limitado,
 cancelación y confirmaciones de recorte con un WebSocket simulado. No usan
 credenciales, sockets UDP ni sesiones xAI reales.
 
 No se cargó firmware ni se conectó a xAI. Faltan pruebas en placa de radio,
 latencia, DMA y recursos, y validación del recorte con el proveedor. La cola PCM
-de salida del backend conserva el comportamiento sin límite del legacy; falta
-incorporar control de presión. No hay retransmisión de Opus.
+de salida v3 está limitada a 128 chunks; saturación y consumo de memoria deben
+evaluarse con respuestas reales. No hay retransmisión de Opus.
 
 Las grabaciones WAV opcionales representan audio aceptado/procesado por el
 bridge; incluyen silencio insertado en uplink. No miden lo escuchado físicamente.

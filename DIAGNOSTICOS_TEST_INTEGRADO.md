@@ -124,3 +124,23 @@ habilita log por frame a ningún nivel.
 
 No se agregaron aún inyectores de pérdida ni se cargó firmware. Logs correctos
 permiten observar los casos, pero no reemplazan la prueba con radio, DAC y xAI real.
+
+## Pacing monotónico y prueba de red (2026-10-11)
+
+Actualizar el backend completo antes de repetir. No cambia UDP v3 ni requiere
+otra compilación de CORE si ya incorpora heartbeat/END/Server busy.
+
+- Correlacionar OUTPUT_PACING_STATS / OUTPUT_PACING con AUDIO y LINK_STATS
+  usando conversation_id y response_id. fps es ritmo local; CORE mide llegadas.
+- Con una respuesta larga y audio disponible, comprobar unos 50 frames/s;
+  comparar incremento rx por tiempo y número de start/resume en CORE.
+- rebases/max_late_ms altos indican atrasos locales o de disponibilidad del
+  audio; hacen falta tiempos/colas para distinguir CPU, scheduler y proveedor.
+- Repetir con red variable: conservar métricas de huecos, NACK, retx, cache_miss,
+  cola, pérdidas/FEC/PLC, pausas y cancelaciones. No atribuir toda pausa a Internet.
+- Bajo pérdidas, un búfer no reconstruye audio ausente. No aumentar plazos ni
+  caché sin medir también la latencia de interrupción y memoria de CORE.
+- Cortes de energía intencionales al terminar la captura son eventos externos.
+
+Las 64 pruebas offline incluyen escenarios deterministas de jitter, pérdidas y
+ACK retrasados. No se abrió xAI ni se enviaron datagramas a un VPS durante ellas.

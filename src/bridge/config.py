@@ -60,6 +60,7 @@ class BridgeConfig:
 
     # UDP output pacing toward ESP32
     output_send_interval_sec: float = 0.02
+    output_pacing_max_lag_sec: float = 0.04  # rebase after an overrun, no unlimited catch-up
     output_end_repeat_count: int = 5
     output_end_repeat_interval: float = 0.02
 

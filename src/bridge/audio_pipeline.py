@@ -6,6 +6,7 @@ from .codec import LibOpusEncoder
 from .recording import RollingWavRecorder
 from .conversation_protocol import Kind
 from .diagnostics import event
+from .pacing import AudioPacer
 
 class AudioPipeline:
     def __init__(self, config):
@@ -23,8 +24,13 @@ class AudioPipeline:
         self.output_active = self.output_finished = False
         self.output_sequence = self.output_pts_samples = 0
         self.output_pending_pcm = bytearray()
+        self.output_pacer = self.new_pacer()
+
+    def new_pacer(self):
+        return AudioPacer(self.config.output_send_interval_sec,self.config.output_pacing_max_lag_sec)
 
     def reset_output(self):
+        self.output_pacer=self.new_pacer()
         self.output_sequence = self.output_pts_samples = 0
         self.output_pending_pcm.clear()
         self.output_active = self.output_finished = False
@@ -51,6 +57,8 @@ class AudioPipeline:
             if chunk is None:
                 await self._flush_tagged(token,True)
                 if not self.output_valid(token): continue
+                await self.output_pacer.wait()
+                if not self.output_valid(token): continue
                 for i in range(self.config.output_end_repeat_count):
                     if not self.output_valid(token): break
                     inner=self.opus_packet_format.pack_end_packet(self.output_sequence,self.output_pts_samples)
@@ -59,6 +67,7 @@ class AudioPipeline:
                 if not self.output_valid(token): continue
                 self.output_active=False;self.output_finished=True;self.output_recorder.close()
                 event("OUTPUT_END",token,final_seq=self.output_sequence,pts=self.output_pts_samples)
+                event("OUTPUT_PACING",token,**self.output_pacer.stats())
 
                 # Keep identity for CANCEL while CORE still drains its jitter/DMA.
                 continue
@@ -72,14 +81,18 @@ class AudioPipeline:
             await self._flush_tagged(token,False)
 
     async def _flush_tagged(self,token,final):
+        pacer=self.output_pacer
         while self.output_valid(token) and (len(self.output_pending_pcm)>=self.config.opus_frame_bytes or (final and self.output_pending_pcm)):
             frame=bytes(self.output_pending_pcm[:self.config.opus_frame_bytes])
             del self.output_pending_pcm[:self.config.opus_frame_bytes]
             frame+=b'\0'*(self.config.opus_frame_bytes-len(frame))
             payload=self.opus_encoder.encode_pcm16_frame(frame)
             inner=self.opus_packet_format.pack_audio_packet(self.output_sequence,self.output_pts_samples,self.config.opus_frame_samples,payload)
+            await pacer.wait()
+            # Cancellation/reset can happen while sleeping. Never send old audio.
+            if not self.output_valid(token) or pacer is not self.output_pacer: return
             self._send(Kind.OPUS,token,self.output_sequence,inner)
+            pacer.sent()
             self.counters["opus_frames"]+=1
             self.output_sequence+=1;self.output_pts_samples+=self.config.opus_frame_samples
-            await asyncio.sleep(self.config.output_send_interval_sec)
 

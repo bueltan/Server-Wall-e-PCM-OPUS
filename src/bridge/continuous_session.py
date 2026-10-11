@@ -311,6 +311,8 @@ class ContinuousSession(AudioPipeline):
                 input_queue=self.input.queue.qsize(),output_queue=self.output_pcm_queue.qsize(),startup_frames=len(self.startup.pending),startup_dropped=self.startup.dropped,
                 **self.counters)
             event('INPUT_STATS',self.conversation.identity,**vars(self.input.stats))
+            if self.conversation.response:
+                event('OUTPUT_PACING_STATS',self.conversation.response,**self.output_pacer.stats())
             await self.check_timeouts(time.monotonic())
 
     async def check_timeouts(self, now):
