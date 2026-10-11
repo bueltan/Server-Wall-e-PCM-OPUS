@@ -1,5 +1,18 @@
 # Logs para el test integrado
 
+## Conversación continua v3 (actual)
+
+Ver PROTOCOLO_UDP_V3.md. El flujo esperado es START_ACK → PROVIDER_READY / READY
+→ SPEECH_STARTED → SPEECH_STOPPED → RESPONSE_STARTED → OUTPUT_END → PLAYED_ACK.
+La conversación sigue abierta después de la respuesta. PCM continúa durante Playing.
+`CONV_STATS` muestra nivel PCM y quiet_ms. Tras 30 segundos de silencio esperando
+entrada: `silence_close` → CANCEL_ACK → `CONVERSATION_CLOSED provider_closed=True`.
+No debe aparecer una nueva conexión xAI hasta el siguiente START.
+`PROVIDER_READY startup_frames/startup_dropped` permite evaluar la apertura.
+`XAI_USAGE` registra el contador de facturación del proveedor cuando está presente.
+Los ejemplos posteriores de COMMIT o V2 corresponden al flujo anterior.
+
+
 Instrumentación habilitada en CORE (`PIUU_DIAGNOSTICS=1`) y backend (nivel INFO).
 No cambia el protocolo de audio ni requiere cambios en EARS. No se imprimen
 frames PCM, claves, credenciales ni transcripciones desde la instrumentación nueva.

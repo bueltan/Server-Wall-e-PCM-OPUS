@@ -1,5 +1,5 @@
 #!/bin/sh
-'''exec' "/home/denis/Documents/Server Wall-e-PCM-OPUS/.venv/bin/python3" "$0" "$@"
+'''exec' "/home/denis/Documents/Wall-e Project/Server Wall-e-PCM-OPUS/.venv/bin/python3" "$0" "$@"
 ' '''
 # -*- coding: utf-8 -*-
 import re

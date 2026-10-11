@@ -98,67 +98,71 @@ class TaggedXai(XaiRealtimeBridge):
 
     async def receive_events_forever(self):
         async for raw in self.ws:
-            event=json.loads(raw);kind=event.get('type')
-            key=(kind,event.get('item_id',''))
-            future=self.confirmations.get(key)
-            if future is not None and not future.done(): future.set_result(event)
-            if kind=='session.updated':
-                self.ready_event.set()
-                log_event('XAI_READY',rate=self.config.output_sample_rate)
-            elif kind=='response.created':
-                response_id=event.get('response',{}).get('id')
-                if response_id and self.pending is not None:
-                    token=self.pending
-                    self.responses[response_id]=token;self.pending=None
-                    self.audio_totals={token:[0,0]}
-                    log_event("XAI_RESPONSE_CREATED",token,response_id=response_id)
-            elif kind=='response.output_item.added':
-                token=self.responses.get(event.get('response_id'))
-                item=event.get('item',{})
-                if token is not None and item.get('role')=='assistant' and item.get('id'):
-                    items=self.items.setdefault(token,[])
-                    if not any(i[0]==item['id'] for i in items):
-                        items.append([item['id'],0,0])
-            elif kind=='response.output_audio.delta':
-                token=self.responses.get(event.get('response_id'))
-                if token is None: continue
-                pcm=base64.b64decode(event['delta'],validate=True)
-                totals=self.audio_totals.setdefault(token,[0,0])
-                totals[0]+=1;totals[1]+=len(pcm)
-                if totals[0]==1:
-                    log_event("XAI_FIRST_AUDIO",token,response_id=event.get('response_id'),
-                              elapsed_ms=round((time.monotonic()-self.response_requested_at)*1000),
-                              valid=self.valid(token))
-                item_id=event.get('item_id');index=event.get('content_index',0)
-                if item_id:
-                    items=self.items.setdefault(token,[])
-                    item=next((i for i in items if i[0]==item_id and i[1]==index),None)
-                    if item is None:
-                        item=[item_id,index,0];items.append(item)
-                    item[2]+=len(pcm)//32
-                if self.valid(token): self.output_pcm_queue.put_nowait((token,pcm))
-            elif kind=='response.output_audio.done':
-                token=self.responses.get(event.get('response_id'))
-                if token is not None:
-                    totals=self.audio_totals.get(token,[0,0])
-                    log_event("XAI_AUDIO_DONE",token,response_id=event.get('response_id'),
-                              chunks=totals[0],bytes=totals[1],audio_ms=totals[1]//32)
-                if token is not None and self.valid(token) and token not in self.output_done:
-                    self.output_done.add(token);self.output_pcm_queue.put_nowait((token,None))
-            elif kind=='response.done':
-                response_id=event.get('response',{}).get('id',event.get('response_id'))
-                token=self.responses.pop(response_id,None)
-                if token is not None:
-                    log_event("XAI_RESPONSE_DONE",token,response_id=response_id,
-                              status=event.get('response',{}).get('status'),valid=self.valid(token))
-                    self.generation_done.set()
-                    if self.valid(token) and token not in self.output_done:
-                        self.output_done.add(token);self.output_pcm_queue.put_nowait((token,None))
-            elif kind=='error':
-                error=event.get('error',{})
-                log_event('XAI_ERROR',code=error.get('code'),error_type=error.get('type'),event_id=error.get('event_id'))
-                raise RuntimeError(f"xAI rejected operation code={error.get('code')}")
+            await self.handle_event(json.loads(raw))
         self.ready_event.clear()
+
+    async def handle_event(self, event):
+        kind=event.get('type')
+        key=(kind,event.get('item_id',''))
+        future=self.confirmations.get(key)
+        if future is not None and not future.done(): future.set_result(event)
+        if kind=='session.updated':
+            self.ready_event.set()
+            log_event('XAI_READY',rate=self.config.output_sample_rate)
+        elif kind=='response.created':
+            response_id=event.get('response',{}).get('id')
+            if response_id and self.pending is not None:
+                token=self.pending
+                self.responses[response_id]=token;self.pending=None
+                self.audio_totals={token:[0,0]}
+                log_event("XAI_RESPONSE_CREATED",token,response_id=response_id)
+        elif kind=='response.output_item.added':
+            token=self.responses.get(event.get('response_id'))
+            item=event.get('item',{})
+            if token is not None and item.get('role')=='assistant' and item.get('id'):
+                items=self.items.setdefault(token,[])
+                if not any(i[0]==item['id'] for i in items):
+                    items.append([item['id'],0,0])
+        elif kind=='response.output_audio.delta':
+            token=self.responses.get(event.get('response_id'))
+            if token is None: return
+            pcm=base64.b64decode(event['delta'],validate=True)
+            totals=self.audio_totals.setdefault(token,[0,0])
+            totals[0]+=1;totals[1]+=len(pcm)
+            if totals[0]==1:
+                log_event("XAI_FIRST_AUDIO",token,response_id=event.get('response_id'),
+                          elapsed_ms=round((time.monotonic()-self.response_requested_at)*1000),
+                          valid=self.valid(token))
+            item_id=event.get('item_id');index=event.get('content_index',0)
+            if item_id:
+                items=self.items.setdefault(token,[])
+                item=next((i for i in items if i[0]==item_id and i[1]==index),None)
+                if item is None:
+                    item=[item_id,index,0];items.append(item)
+                item[2]+=len(pcm)//32
+            if self.valid(token): self.output_pcm_queue.put_nowait((token,pcm))
+        elif kind=='response.output_audio.done':
+            token=self.responses.get(event.get('response_id'))
+            if token is not None:
+                totals=self.audio_totals.get(token,[0,0])
+                log_event("XAI_AUDIO_DONE",token,response_id=event.get('response_id'),
+                          chunks=totals[0],bytes=totals[1],audio_ms=totals[1]//32)
+            if token is not None and self.valid(token) and token not in self.output_done:
+                self.output_done.add(token);self.output_pcm_queue.put_nowait((token,None))
+        elif kind=='response.done':
+            response_id=event.get('response',{}).get('id',event.get('response_id'))
+            token=self.responses.pop(response_id,None)
+            if token is not None:
+                log_event("XAI_RESPONSE_DONE",token,response_id=response_id,
+                          status=event.get('response',{}).get('status'),valid=self.valid(token),
+                          billable_audio_seconds=event.get('response',{}).get('usage',{}).get('billable_audio_seconds'))
+                self.generation_done.set()
+                if self.valid(token) and token not in self.output_done:
+                    self.output_done.add(token);self.output_pcm_queue.put_nowait((token,None))
+        elif kind=='error':
+            error=event.get('error',{})
+            log_event('XAI_ERROR',code=error.get('code'),error_type=error.get('type'),event_id=error.get('event_id'))
+            raise RuntimeError(f"xAI rejected operation code={error.get('code')}")
 
     async def close(self):
         self.ready_event.clear()

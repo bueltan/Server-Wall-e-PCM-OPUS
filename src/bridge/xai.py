@@ -43,6 +43,9 @@ class XaiRealtimeBridge:
         async with self.send_lock:
             await self.ws.send(json.dumps(payload))
 
+    def turn_detection(self):
+        return None
+
     async def _send_session_update(self) -> None:
         await self._safe_send(
             {
@@ -50,7 +53,7 @@ class XaiRealtimeBridge:
                 "session": {
                     "voice": self.config.xai_voice,
                     "instructions": self.config.xai_prompt,
-                    "turn_detection": None,
+                    "turn_detection": self.turn_detection(),
                     "tools": [
                         {"type": "web_search"},
                     ],

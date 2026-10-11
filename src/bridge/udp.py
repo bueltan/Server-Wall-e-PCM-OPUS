@@ -1,14 +1,14 @@
-"""UDP endpoint routing; client state is isolated in ClientSession.
+"""UDP endpoint routing; client state is isolated in ContinuousSession.
 
-Single-session admission for now. A future registry can create one ClientSession
+Single-session admission for now. A future registry can create one ContinuousSession
 per peer, each with its own xAI connection, queues, encoder and recordings.
 """
 import asyncio
 from .config import BridgeConfig
-from .managed_session import ManagedSession
+from .continuous_session import ContinuousSession
 
 class UdpAudioBridgeProtocol(asyncio.DatagramProtocol):
-    def __init__(self, config: BridgeConfig, session_factory=ManagedSession):
+    def __init__(self, config: BridgeConfig, session_factory=ContinuousSession):
         self.session = session_factory(config)
 
     def connection_made(self, transport):
