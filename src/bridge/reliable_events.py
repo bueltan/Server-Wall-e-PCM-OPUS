@@ -30,6 +30,8 @@ class ReliableEvents:
         sent, future = self.pending
         if packet.identity == sent.identity and packet.sequence == sent.sequence and not future.done():
             future.set_result(int.from_bytes(packet.body, 'big'))
+            return True
+        return False
 
     async def run(self):
         while True:
@@ -46,6 +48,7 @@ class ReliableEvents:
                 else:
                     future.cancel()
                     await self.failed('event_ack_timeout')
+                    return
             finally:
                 self.pending = None
 
@@ -53,6 +56,6 @@ class ReliableEvents:
         self.close(); self.sequence=0; self.pending=None; self.start()
 
     def close(self):
-        if self.task: self.task.cancel()
+        if self.task and self.task is not asyncio.current_task(): self.task.cancel()
         if self.pending: self.pending[1].cancel()
         while not self.queue.empty(): self.queue.get_nowait()[1].cancel()

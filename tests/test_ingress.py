@@ -105,6 +105,21 @@ class InboundTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(s.stats.missing,3);self.assertEqual(s.stats.send_failed,2)
         self.assertFalse(s.task.done())
 
+    async def test_coordination_pause_does_not_consume_send_timeout(self):
+        s=self.session;gate=asyncio.Event();entered=asyncio.Event()
+        async def before_audio():
+            entered.set();await gate.wait()
+        s.before_audio=before_audio
+        s.admit(self.audio(0));s.start();await entered.wait()
+        # Longer than the actual send timeout, but no transport send is attempted.
+        await asyncio.sleep(self.config.input_send_timeout_sec*2)
+        self.assertEqual(s.stats.send_failed,0)
+        self.assertEqual(self.events,[])
+        for seq in range(1,6): s.admit(self.audio(seq))
+        self.assertGreater(s.stats.dropped_full,0)
+        gate.set();await self.until(lambda:('audio',0) in self.events)
+        self.assertEqual(s.stats.send_failed,0)
+
     async def test_shutdown_cancels_blocked_send(self):
         s=self.session;entered=asyncio.Event()
         async def blocked(packet): entered.set();await asyncio.Future()

@@ -50,6 +50,13 @@ class ModelTests(unittest.TestCase):
         c.played(second);self.assertEqual(c.phase,Phase.LISTENING)
         c.close();self.assertIsNone(c.response_started())
 
+    def test_session_timeouts_reject_disabled_or_nonfinite_values(self):
+        for name in ('core_disconnect_timeout_sec','history_repair_timeout_sec',
+                     'history_item_timeout_sec','history_confirmation_timeout_sec'):
+            for value in (0,-1,float('nan'),float('inf')):
+                with self.subTest(name=name,value=value), self.assertRaises(ValueError):
+                    ContinuousSession(replace(BridgeConfig(),**{name:value}))
+
     def test_v2_is_explicitly_incompatible(self):
         p=Packet(Kind.START,0,Identity(1,2,3,0),4)
         b=encode(p);self.assertEqual(b[:5],b'PIU3\x03');self.assertEqual(decode(b),p)
@@ -212,14 +219,14 @@ class SessionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(attempts),1)
         self.assertTrue(any(p.kind==Kind.ERROR for p in self.s.transport.sent))
 
-    async def test_vad_cancellation_waits_for_specific_old_response(self):
+    async def test_vad_repair_does_not_require_response_done_when_item_is_known(self):
         await self.s.xai.handle_event({'type':'response.created','response':{'id':'old'}})
         await self.s.xai.handle_event({'type':'response.output_audio.delta','response_id':'old',
             'item_id':'old-item','delta':base64.b64encode(bytes(1280)).decode()})
         await self.ack_events()
         await self.s.xai.handle_event({'type':'input_audio_buffer.speech_started'})
         await self.ack_events(20)
-        self.assertFalse(self.s.xai.history_ready.is_set())
+        self.assertTrue(self.s.xai.history_ready.is_set())
         await self.s.xai.handle_event({'type':'response.done','response':{'id':'old','status':'cancelled'}})
         await settle();self.assertTrue(self.s.xai.history_ready.is_set())
         self.assertTrue(any(p['type']=='conversation.item.truncate' for p in self.provider.calls))
@@ -233,6 +240,154 @@ class SessionTests(unittest.IsolatedAsyncioTestCase):
         self.deliver(Kind.PCM,self.i,0,self.s.pcm_packet_format.pack_end_packet(0,0))
         self.deliver(Kind.COMMIT,self.i,4,bytes(8));await settle()
         self.assertEqual(self.s.counters['invalid'],1)
+        self.assertEqual(self.s.conversation.identity,self.i)
+
+    async def test_disconnect_timeout_closes_provider_even_while_playing(self):
+        token=await self.response(count=4);await self.ack_events()
+        seen=self.s.last_peer_seen
+        await self.s.check_timeouts(seen+self.s.config.core_disconnect_timeout_sec-.01)
+        self.assertEqual(self.s.conversation.response,token)
+        await self.s.check_timeouts(seen+self.s.config.core_disconnect_timeout_sec)
+        self.assertIsNone(self.s.conversation.identity)
+        self.assertTrue(self.provider.closed)
+        self.assertFalse(self.s.input_live)
+        self.assertTrue(self.s.input.task.done())
+        self.assertIsNone(self.s.provider_task)
+        self.assertTrue(self.s.output_pcm_queue.empty())
+        self.assertFalse(self.s.startup.pending)
+
+    async def test_only_valid_core_traffic_refreshes_disconnect_timer(self):
+        self.s.last_peer_seen=1
+        self.deliver(Kind.PING,peer=('127.0.0.2',1234))
+        self.deliver(Kind.PING,Identity(11,self.s.server_nonce+1,0,0))
+        self.deliver(Kind.PING,Identity(11,self.s.server_nonce,0,0),body=b'invalid')
+        self.deliver(Kind.EVENT_ACK,self.i,999,bytes(4))
+        self.deliver(Kind.PCM,self.i,body=b'invalid')
+        self.assertEqual(self.s.last_peer_seen,1)
+        await self.s.xai.handle_event({'type':'input_audio_buffer.speech_stopped'})
+        self.assertEqual(self.s.last_peer_seen,1)
+        self.deliver(Kind.PING,Identity(11,self.s.server_nonce,0,0))
+        self.assertGreater(self.s.last_peer_seen,1)
+
+    async def test_disconnect_cancels_history_wait_and_next_conversation_can_open(self):
+        await self.response();await self.ack_events()
+        await self.s.xai.handle_event({'type':'input_audio_buffer.speech_started'})
+        await settle()  # deliberately do not acknowledge CORE playback
+        self.assertTrue(self.s.interruptions.pending)
+        await self.s.check_timeouts(self.s.last_peer_seen+self.s.config.core_disconnect_timeout_sec)
+        self.assertTrue(self.provider.closed)
+        self.assertFalse(self.s.interruptions.pending)
+        self.assertTrue(self.s.xai.history_ready.is_set())
+        self.i=Identity(self.i.client,self.i.server,2,0)
+        self.deliver(Kind.START,self.i,5);await settle();await self.ack_events()
+        self.assertEqual(self.s.conversation.identity,self.i)
+        self.assertEqual(self.connects,2)
+
+    async def test_created_then_interrupted_repairs_late_item_without_done(self):
+        await self.s.xai.handle_event({'type':'response.created','response':{'id':'early'}})
+        token=self.s.conversation.response
+        await self.s.xai.handle_event({'type':'input_audio_buffer.speech_started'})
+        await self.ack_events(0)
+        self.assertTrue(self.s.interruptions.pending)
+        await self.s.xai.handle_event({'type':'response.output_item.added','response_id':'early',
+            'item':{'id':'early-item','role':'assistant'}})
+        await settle()
+        self.assertTrue(any(p['type']=='conversation.item.delete' and p['item_id']=='early-item' for p in self.provider.calls))
+        self.assertEqual(self.s.conversation.identity,self.i)
+        self.assertFalse(self.s.interruptions.pending)
+        self.assertTrue(self.s.xai.history_ready.is_set())
+        self.assertFalse(any(p.kind==Kind.OPUS and p.identity==token for p in self.s.transport.sent))
+
+    async def test_wake_and_vad_share_one_repair(self):
+        token=await self.response(count=4);await self.ack_events()
+        await self.s.xai.handle_event({'type':'input_audio_buffer.speech_started'})
+        self.deliver(Kind.INTERRUPT,token,10,struct.pack('!I',40));await settle()
+        self.assertEqual(len(self.s.interruptions.active),1)
+        await self.ack_events(0)
+        mutations=[p for p in self.provider.calls if p['type'].startswith('conversation.item.')]
+        self.assertEqual(len(mutations),1)
+        self.assertEqual(mutations[0]['audio_end_ms'],40)
+
+    async def test_response_created_during_history_repair_closes_without_output(self):
+        await self.response();await self.ack_events()
+        await self.s.xai.handle_event({'type':'input_audio_buffer.speech_started'})
+        await self.s.xai.handle_event({'type':'response.created','response':{'id':'too-early'}})
+        await settle()
+        self.assertTrue(self.provider.closed)
+        self.assertIsNone(self.s.conversation.identity)
+        self.assertFalse(self.s.interruptions.pending)
+
+    async def test_manual_cancel_is_sent_before_playback_ack(self):
+        await self.s.xai.handle_event({'type':'response.created','response':{'id':'streaming'}})
+        token=self.s.conversation.response
+        self.deliver(Kind.INTERRUPT,token,10,bytes(4));await settle()
+        self.assertTrue(any(p['type']=='response.cancel' for p in self.provider.calls))
+        self.assertTrue(self.s.interruptions.pending)
+        await self.ack_events()
+        self.assertFalse(self.s.interruptions.pending)
+
+    async def test_late_audio_is_ignored_and_new_late_item_closes_uncertain_history(self):
+        token=await self.response(count=4);await self.ack_events()
+        await self.s.xai.handle_event({'type':'input_audio_buffer.speech_started'})
+        await self.ack_events(20)
+        await self.s.xai.handle_event({'type':'response.output_audio.delta','response_id':'r1',
+            'item_id':'item-r1','delta':base64.b64encode(bytes(640)).decode()})
+        self.assertNotIn(token,self.s.xai.items)
+        self.assertEqual(self.s.conversation.identity,self.i)
+        await self.s.xai.handle_event({'type':'response.output_item.added','response_id':'r1',
+            'item':{'id':'unexpected-late-item','role':'assistant'}})
+        await settle()
+        self.assertTrue(self.provider.closed)
+        self.assertIsNone(self.s.conversation.identity)
+
+    async def test_missing_core_event_ack_closes_provider_without_self_cancellation(self):
+        await self.response()  # response start event deliberately unacknowledged
+        async def closed():
+            while not self.provider.closed: await asyncio.sleep(.01)
+        await asyncio.wait_for(closed(),2)
+        self.assertFalse(self.s.closing)
+        self.assertIsNone(self.s.conversation.identity)
+        self.assertIsNone(self.s.provider_task)
+
+    async def test_unconfirmed_repair_deadline_closes_provider(self):
+        await self.response(count=4);await self.ack_events()
+        self.s.config=replace(self.s.config,history_repair_timeout_sec=.03)
+        original_send=self.provider.send
+        async def no_confirmation(raw):
+            payload=json.loads(raw)
+            if payload['type'].startswith('conversation.item.'):
+                self.provider.calls.append(payload)
+                return
+            await original_send(raw)
+        self.provider.send=no_confirmation
+        await self.s.xai.handle_event({'type':'input_audio_buffer.speech_started'})
+        await self.ack_events(20)
+        async def closed():
+            while not self.provider.closed: await asyncio.sleep(.001)
+        await asyncio.wait_for(closed(),1)
+        self.assertFalse(self.s.interruptions.pending)
+        self.assertFalse(self.s.xai.confirmations)
+        self.assertTrue(self.s.xai.history_ready.is_set())
+
+    async def test_item_arriving_during_confirmation_is_repaired_too(self):
+        await self.response(count=4);await self.ack_events()
+        original_send=self.provider.send
+        added=False
+        async def another_item(raw):
+            nonlocal added
+            if json.loads(raw)['type']=='conversation.item.truncate' and not added:
+                added=True
+                await self.s.xai.handle_event({'type':'response.output_item.added','response_id':'r1',
+                    'item':{'id':'additional-item','role':'assistant'}})
+            await original_send(raw)
+        self.provider.send=another_item
+        # Reopen the old response mapping to model another item already in flight.
+        token=self.s.conversation.response
+        self.s.xai.responses['r1']=token
+        await self.s.xai.handle_event({'type':'input_audio_buffer.speech_started'})
+        await self.ack_events(20)
+        self.assertTrue(any(p['type']=='conversation.item.delete' and p['item_id']=='additional-item'
+                            for p in self.provider.calls))
         self.assertEqual(self.s.conversation.identity,self.i)
 
 class ReliableTests(unittest.IsolatedAsyncioTestCase):

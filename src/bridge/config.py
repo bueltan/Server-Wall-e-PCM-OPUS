@@ -54,6 +54,12 @@ class BridgeConfig:
     input_silence_max_ms: int = 200
     input_send_timeout_sec: float = 1.0
 
+    # Independent deadlines: CORE liveness and provider history transactions.
+    core_disconnect_timeout_sec: float = 10.0
+    history_repair_timeout_sec: float = 4.0
+    history_item_timeout_sec: float = 1.0
+    history_confirmation_timeout_sec: float = 1.0
+
     # Provider is opened only after START; bound audio retained during handshake.
     provider_open_timeout_sec: float = 6.0
     startup_audio_frames: int = 300  # six seconds, at most 197400 raw bytes

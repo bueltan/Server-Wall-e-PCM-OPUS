@@ -69,12 +69,13 @@ class InboundSession:
     the production v2 session supplies both.
     """
     def __init__(self, packet_format, config, audio_sink: Callable[[dict], Awaitable[bool]],
-                 end_sink: Callable[[dict], Awaitable[None]], commit_sink: Callable[[], Awaitable[bool]], nack_sink=None, silence_sink=None):
+                 end_sink: Callable[[dict], Awaitable[None]], commit_sink: Callable[[], Awaitable[bool]], nack_sink=None, silence_sink=None, before_audio=None):
         if config.input_queue_frames < 1 or config.input_reorder_window_sec < 0 or config.input_send_timeout_sec <= 0:
             raise ValueError('Invalid ingress queue/window/timeout settings')
         self.format, self.config = packet_format, config
         self.audio_sink, self.end_sink, self.commit_sink = audio_sink, end_sink, commit_sink
         self.stats = IngressStats()
+        self.before_audio = before_audio
         self.nack_sink = nack_sink
         self.silence_sink = silence_sink
         self.requested = set()
@@ -154,6 +155,10 @@ class InboundSession:
 
     async def _send(self, callback, *args):
         try:
+            # Deliberate coordination pauses have their own bounded transaction;
+            # the transport send deadline starts only once audio may proceed.
+            if self.before_audio and callback in (self.audio_sink,self.silence_sink):
+                await self.before_audio()
             ok = await asyncio.wait_for(callback(*args), self.config.input_send_timeout_sec)
             if ok is False:
                 self.stats.send_failed += 1

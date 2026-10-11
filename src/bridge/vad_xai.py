@@ -14,12 +14,15 @@ class VadXai(TaggedXai):
         self.latest_response_id = None
         self.pause_count = 0
         self.response_ids = {}
+        self.history_changed = asyncio.Event()
+        self.repaired_responses = {}
 
     def turn_detection(self):
         return {'type': 'server_vad'}
 
     async def connect(self):
         self.done.clear(); self.response_ids.clear(); self.provider_done.clear()
+        self.repaired_responses.clear(); self.history_changed.clear()
         self.latest_response_id=None; self.pause_count=0; self.history_ready.set()
         await super().connect()
 
@@ -30,12 +33,29 @@ class VadXai(TaggedXai):
         self.pause_count = max(0, self.pause_count-1)
         if not self.pause_count: self.history_ready.set()
 
-    async def send_audio_append(self, pcm):
+    async def wait_input_ready(self):
+        if self.history_ready.is_set(): return
+        started=time.monotonic()
+        event('INPUT_PAUSED',reason='history_repair')
         await self.history_ready.wait()
-        return await super().send_audio_append(pcm)
+        event('INPUT_RESUMED',paused_ms=round((time.monotonic()-started)*1000))
+
+    async def cancel_response(self, token):
+        done=self.done.get(token)
+        if done and not done.is_set():
+            response_id=self.response_ids[token]
+            event('XAI_RESPONSE_CANCEL',token,response_id=response_id)
+            await self._safe_send({'type':'response.cancel','response_id':response_id})
 
     async def handle_event(self, message):
         kind = message.get('type')
+        response_id=message.get('response_id')
+        retired=self.repaired_responses.get(response_id)
+        if retired is not None and kind in ('response.output_item.added','response.output_audio.delta'):
+            item_id=message.get('item',{}).get('id') if kind=='response.output_item.added' else message.get('item_id')
+            if item_id and item_id not in retired:
+                self.events('history.late_item',message)
+            return  # old audio must not recreate local bookkeeping or playback
         if kind in ('input_audio_buffer.speech_started', 'input_audio_buffer.speech_stopped'):
             self.events(kind, message)
         elif kind == 'response.created':
@@ -51,6 +71,8 @@ class VadXai(TaggedXai):
                 self.response_ids[token] = message.get('response', {}).get('id')
         token = self.responses.get(message.get('response', {}).get('id', message.get('response_id')))
         await super().handle_event(message)
+        if kind in ("response.output_item.added", "response.output_audio.delta", "response.done"):
+            self.history_changed.set()
         if kind == 'response.done':
             event('XAI_USAGE',token,billable_audio_seconds=message.get('response',{}).get('usage',{}).get('billable_audio_seconds'))
             response_id=message.get('response',{}).get('id',message.get('response_id'))
@@ -61,28 +83,54 @@ class VadXai(TaggedXai):
                 if old!=self.latest_response_id and self.provider_done[old].is_set():
                     self.provider_done.pop(old,None)
 
-    async def repair_history(self, token, played_ms, manual=False):
+    async def repair_history(self, token, played_ms, manual=False, phase=None):
         """Preserve the new user audio. Never clear it on a VAD interruption."""
         if token is None: return
         self.cancel_identity = token
-        done = self.done.get(token)
-        if done and not done.is_set():
-            if manual:
-                await self._safe_send({'type': 'response.cancel', 'response_id': self.response_ids[token]})
-            await asyncio.wait_for(done.wait(), 1.0)
+        if manual: await self.cancel_response(token)
+        # A concrete item can be repaired without depending on response.done.
+        # If interrupted immediately after response.created, wait for either an
+        # item to identify or a terminal response proving no output remains.
+        async def wait_item():
+            while not self.items.get(token):
+                done=self.done.get(token)
+                if done is None or done.is_set(): return
+                self.history_changed.clear()
+                await self.history_changed.wait()
+        if phase: phase("item_wait")
+        await asyncio.wait_for(wait_item(),self.config.history_item_timeout_sec)
+        if phase: phase("history_confirmation")
         remaining = max(0, played_ms)
+        processed=set()
         async with self.operation_lock:
-            for item_id, index, duration in self.items.pop(token, []):
-                if duration > 0 and remaining >= duration:
-                    remaining -= duration
-                elif remaining > 0:
-                    await self._confirmed({'type':'conversation.item.truncate','item_id':item_id,
-                        'content_index':index,'audio_end_ms':min(remaining,duration)},
-                        'conversation.item.truncated',item_id)
-                    remaining = 0
-                else:
-                    await self._confirmed({'type':'conversation.item.delete','item_id':item_id},
-                        'conversation.item.deleted',item_id)
+            while True:
+                pending=[item for item in self.items.get(token,[]) if (item[0],item[1]) not in processed]
+                if not pending: break
+                for item_id, index, duration in pending:
+                    done=self.done.get(token)
+                    terminal=done is not None and done.is_set()
+                    last=self.items.get(token,[])[-1]
+                    # While generation is not confirmed terminal, even the last
+                    # fully heard item needs a boundary: it could still grow.
+                    if duration>0 and remaining>=duration and (terminal or last[:2]!=[item_id,index]):
+                        remaining-=duration
+                    elif remaining>0:
+                        await self._confirmed({'type':'conversation.item.truncate','item_id':item_id,
+                            'content_index':index,'audio_end_ms':min(remaining,duration)},
+                            'conversation.item.truncated',item_id)
+                        remaining=0
+                    else:
+                        await self._confirmed({'type':'conversation.item.delete','item_id':item_id},
+                            'conversation.item.deleted',item_id)
+                    processed.add((item_id,index))
+                # Account for items delivered while confirmation was in flight.
+        response_id=self.response_ids.get(token)
+        if response_id:
+            self.repaired_responses[response_id]={item[0] for item in self.items.get(token,[])}
+            while len(self.repaired_responses)>64:
+                self.repaired_responses.pop(next(iter(self.repaired_responses)))
+            self.responses.pop(response_id,None)
+        self.items.pop(token, None)
         self.done.pop(token, None); self.response_ids.pop(token, None)
         self.output_done.discard(token); self.audio_totals.pop(token, None)
         event('HISTORY_REPAIRED', token, played_ms=played_ms, manual=manual)

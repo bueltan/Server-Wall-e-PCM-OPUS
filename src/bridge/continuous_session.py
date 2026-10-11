@@ -1,6 +1,7 @@
 """UDP v3 conversation coordinator; one instance per admitted client."""
 import asyncio
 import secrets
+import math
 import struct
 import time
 from .audio_pipeline import AudioPipeline
@@ -11,9 +12,14 @@ from .vad_xai import VadXai
 from .ingress import InboundSession
 from .diagnostics import event
 from .startup_audio import StartupAudio
+from .interruption import InterruptionCoordinator
 
 class ContinuousSession(AudioPipeline):
     def __init__(self, config):
+        for name in ('core_disconnect_timeout_sec','history_repair_timeout_sec',
+                     'history_item_timeout_sec','history_confirmation_timeout_sec'):
+            if not math.isfinite(getattr(config,name)) or getattr(config,name)<=0:
+                raise ValueError(f"{name} must be finite and positive")
         super().__init__(config)
         self.transport = self.remote_addr = self.client_nonce = None
         self.server_nonce = secrets.randbits(64) or 1
@@ -27,7 +33,7 @@ class ContinuousSession(AudioPipeline):
         self.peer_resetting = False
         self.last_peer_seen = time.monotonic()
         self.repairs = set()
-        self.history_tasks = set()
+        self.interruptions = InterruptionCoordinator(self)
         self.provider_task = None
         self.input_live = False
         self.startup = StartupAudio(config.startup_audio_frames)
@@ -39,7 +45,7 @@ class ContinuousSession(AudioPipeline):
 
     def new_input(self):
         worker = InboundSession(self.pcm_packet_format, self.config, self._accept_audio,
-            self.ignore_end, self.no_commit, nack_sink=self.nack, silence_sink=self._accept_audio)
+            self.ignore_end, self.no_commit, nack_sink=self.nack, silence_sink=self._accept_audio, before_audio=self.xai.wait_input_ready)
         worker.log_identity = self.conversation.identity
         return worker
 
@@ -88,21 +94,27 @@ class ContinuousSession(AudioPipeline):
                 self.client_nonce = p.identity.client
                 self.server_nonce = secrets.randbits(64) or 1
                 self.last_conversation = 0; self.acks.clear()
+            self.last_peer_seen=time.monotonic()
             self._send(Kind.HELLO_ACK, Identity(self.client_nonce,self.server_nonce,0,0),p.sequence,flags=int(self.ready()))
             return
         if addr != self.remote_addr or p.identity.client != self.client_nonce:
             self.counters['foreign'] += 1; return
         if p.identity.server != self.server_nonce:
             self._send(Kind.ERROR,p.identity,p.sequence); return
-        self.last_peer_seen=time.monotonic()
         if p.kind == Kind.PING:
+            if p.body or p.identity.turn or p.identity.response:
+                self.counters["invalid"] += 1; return
+            self.last_peer_seen=time.monotonic()
             self._send(Kind.PONG,p.identity,p.sequence,flags=int(self.ready())); return
         current = self.conversation.identity
         if p.kind == Kind.EVENT_ACK:
-            self.events.ack(p); return
+            if self.events.ack(p): self.last_peer_seen=time.monotonic()
+            return
         if p.kind in (Kind.START,Kind.CANCEL,Kind.INTERRUPT,Kind.PLAYED):
             if not p.identity.turn: return
             if (p.kind == Kind.START and (p.body or p.identity.response)) or (p.kind != Kind.START and len(p.body)!=4): return
+            if p.kind == Kind.START or (current and p.identity.turn == current.turn):
+                self.last_peer_seen=time.monotonic()
             key = (p.kind,p.identity.turn,p.sequence)
             if key in self.acks: self._wire(self.acks[key]); return
             if key in self.pending: return
@@ -115,12 +127,15 @@ class ContinuousSession(AudioPipeline):
         if current is None or p.identity.client != current.client or p.identity.turn != current.turn:
             self.counters['stale'] += 1; return
         if p.identity.response: return  # uplink is independent of response identity
-        if p.kind == Kind.MISSING and not p.body: self.input.stats.cache_misses += 1
+        if p.kind == Kind.MISSING and not p.body:
+            self.last_peer_seen=time.monotonic()
+            self.input.stats.cache_misses += 1
         elif p.kind == Kind.PCM:
             try: inner = self.input.validate(p.body)
             except ValueError: self.counters['invalid'] += 1; return
             if inner['seq'] != p.sequence or self.pcm_packet_format.is_end_packet(inner):
                 self.counters['invalid'] += 1; return
+            self.last_peer_seen=time.monotonic()
             if self.input_live: self.input.admit(p.body)
             else: self.startup.admit(p.body)
 
@@ -141,15 +156,21 @@ class ContinuousSession(AudioPipeline):
             self.reset_output()
             future = self.notify(Event.SPEECH_STARTED, previous)
             if previous:
-                self.xai.pause_input()
-                task=self.schedule(self.repair(previous, future))
-                self.history_tasks.add(task); task.add_done_callback(self.history_tasks.discard)
+                self.interruptions.begin(previous, future)
             event('SPEECH_STARTED',self.conversation.identity,utterance=self.conversation.utterance,
                   interrupted_response=previous.response if previous else 0)
         elif kind == 'input_audio_buffer.speech_stopped':
             self.conversation.speech_stopped(); self.notify(Event.SPEECH_STOPPED)
             event('SPEECH_STOPPED',self.conversation.identity,utterance=self.conversation.utterance)
+        elif kind == 'history.late_item':
+            event('HISTORY_LATE_ITEM',self.conversation.identity,response_id=message.get('response_id'))
+            self.schedule(self.fail('late_item_after_history_repair'))
         elif kind == 'response.created':
+            if self.interruptions.pending:
+                event('RESPONSE_DURING_HISTORY_REPAIR', self.conversation.identity,
+                      response_id=message.get('response',{}).get('id'))
+                self.schedule(self.fail('response_before_history_ready'))
+                return None
             token = self.conversation.response_started()
             self.reset_output(); self.output_gate.clear()
             future = self.notify(Event.RESPONSE_STARTED, token)
@@ -162,16 +183,6 @@ class ContinuousSession(AudioPipeline):
             await future
             if self.output_valid(token): self.output_gate.set()
         except asyncio.CancelledError: pass
-
-    async def repair(self, token, future):
-        try:
-            played = await future
-            await self.xai.repair_history(token, played)
-        except asyncio.CancelledError: raise
-        except Exception as exc:
-            event('HISTORY_REPAIR_FAILED',token,error=type(exc).__name__)
-            await self.fail('history_uncertain')
-        finally: self.xai.resume_input()
 
     async def run_controls(self):
         while True:
@@ -208,24 +219,15 @@ class ContinuousSession(AudioPipeline):
                     old=self.conversation.response
                     self.conversation.speech_started(); self.reset_output()
                     future=self.notify(Event.SPEECH_STARTED,old)
-                    self.xai.pause_input()
-                    task=self.schedule(self.manual_repair(old,p,future))
-                    self.history_tasks.add(task);task.add_done_callback(self.history_tasks.discard)
+                    if old is None and self.interruptions.active:
+                        old=next(iter(self.interruptions.active))
+                    played=int.from_bytes(p.body,'big') if old and p.identity==old else 0
+                    self.interruptions.begin(old, future, manual=True, played_ms=played)
                     self.ack(p)
             except asyncio.CancelledError: raise
             except Exception as exc:
                 event('CONTROL_FAILED',p.identity,error=type(exc).__name__)
                 self.ack(p,False); await self.fail('control_failed')
-
-    async def manual_repair(self, old, packet, future):
-        try:
-            played=max(await future,int.from_bytes(packet.body,'big') if old and packet.identity==old else 0)
-            if old: await self.xai.repair_history(old,played,manual=True)
-        except asyncio.CancelledError: raise
-        except Exception as exc:
-            event('MANUAL_REPAIR_FAILED',old,error=type(exc).__name__)
-            await self.fail('manual_history_uncertain')
-        finally: self.xai.resume_input()
 
     async def stop_provider(self):
         task=self.provider_task
@@ -240,6 +242,7 @@ class ContinuousSession(AudioPipeline):
         self.closing=True
         self.conversation.close(); self.input.close(); self.input_live=False
         self.startup.clear(); self.events.reset()
+        await self.interruptions.close()
         for task in list(self.repairs):
             if task is not asyncio.current_task(): task.cancel()
         if self.input.task:
@@ -305,18 +308,26 @@ class ContinuousSession(AudioPipeline):
                 await self.fail('provider_closed')
 
     async def watchdog(self):
+        next_stats=time.monotonic()+5
         while True:
-            await asyncio.sleep(5)
+            await asyncio.sleep(min(1.0,self.config.core_disconnect_timeout_sec))
+            now=time.monotonic()
+            await self.check_timeouts(now)
+            if now<next_stats: continue
+            next_stats=now+5
             event('CONVERSATION_STATS',self.conversation.identity,phase=self.conversation.phase.value,
+                peer_age_ms=round((now-self.last_peer_seen)*1000),
                 input_queue=self.input.queue.qsize(),output_queue=self.output_pcm_queue.qsize(),startup_frames=len(self.startup.pending),startup_dropped=self.startup.dropped,
                 **self.counters)
             event('INPUT_STATS',self.conversation.identity,**vars(self.input.stats))
             if self.conversation.response:
                 event('OUTPUT_PACING_STATS',self.conversation.response,**self.output_pacer.stats())
-            await self.check_timeouts(time.monotonic())
 
     async def check_timeouts(self, now):
-        if self.conversation.identity and now-self.last_peer_seen>10:
+        age=now-self.last_peer_seen
+        if self.conversation.identity and not self.closing and age>=self.config.core_disconnect_timeout_sec:
+            event('CORE_DISCONNECTED',self.conversation.identity,absent_ms=round(age*1000),
+                  timeout_sec=self.config.core_disconnect_timeout_sec)
             await self.fail('peer_timeout')
 
     def connection_lost(self, exc):

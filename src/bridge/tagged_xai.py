@@ -54,7 +54,7 @@ class TaggedXai(XaiRealtimeBridge):
                   audio_end_ms=payload.get('audio_end_ms'))
         try:
             await self._safe_send(payload)
-            await asyncio.wait_for(future,1.0)
+            await asyncio.wait_for(future,self.config.history_confirmation_timeout_sec)
             log_event("XAI_CONFIRMED",self.cancel_identity,confirmation=event,item=item,
                       elapsed_ms=round((time.monotonic()-started)*1000))
         finally:

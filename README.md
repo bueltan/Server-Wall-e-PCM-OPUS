@@ -39,6 +39,42 @@ Ver [contrato UDP v3 y responsabilidades](PROTOCOLO_UDP_V3.md).
 Los módulos managed_session/session/session_protocol (v2 y legacy) quedan como
 referencia y regresión; el endpoint activo usa continuous_session.
 
+## Desconexión de CORE e interrupciones
+
+`core_disconnect_timeout_sec` en `src/bridge/config.py` controla cuánto tiempo
+puede permanecer abierta una conversación sin mensajes válidos del CORE admitido.
+El valor inicial es **10 segundos** y se comprueba cada segundo mediante reloj
+monotónico. HELLO del cliente admitido, PING válido, PCM válido y controles/ACK
+válidos actualizan la presencia; actividad de xAI, paquetes malformados y otros
+clientes no la renuevan. El límite es independiente del cierre por silencio de
+30 segundos que decide CORE. Los ACK de eventos también pueden provocar un
+cierre antes si agotan sus reintentos.
+
+Al vencer se registra `CORE_DISCONNECTED` y se cierra la conversación: se cancela
+entrada, reproducción y reparación pendiente; se descartan buffers y se cierra
+el WebSocket xAI, cuyo cierre tiene un máximo de 2 segundos antes de abortar el
+transporte. CORE debe abrir explícitamente otra conversación para volver a usar
+xAI; no se conserva contexto ni se reconecta al proveedor en segundo plano.
+
+`InterruptionCoordinator` unifica wake manual y VAD por ID de respuesta. CORE
+confirma la posición reproducida; `VadXai` confirma recorte/eliminación de historial.
+Una pausa de coordinación (`INPUT_PAUSED`/`INPUT_RESUMED`) no consume el timeout
+real de envío de audio. Se conserva la cola limitada y el descarte al llenarse.
+
+Los plazos son independientes y configurables: `history_repair_timeout_sec`
+(4 s para toda la transacción), `history_item_timeout_sec` (1 s para conocer el
+mensaje interrumpido) y `history_confirmation_timeout_sec` (1 s por confirmación).
+Con un mensaje identificado se intenta reparar sin exigir antes `response.done`.
+Sin mensaje se espera su llegada o el fin de respuesta, siempre con límite.
+Los mensajes no se retiran del registro antes de confirmar su reparación.
+
+Una respuesta nueva antes de confirmar el historial, o un mensaje nuevo tardío
+de una respuesta ya reparada, cierra la sesión con motivo explícito; bloquear
+solo su reproducción no garantiza que se haya generado con el contexto correcto.
+Logs útiles: `INTERRUPT_BEGIN`, `INTERRUPT_MERGED`, `INTERRUPT_PLAYBACK_ACK`,
+`INTERRUPT_COMPLETE`, `HISTORY_REPAIR_FAILED` (fase y tiempo),
+`RESPONSE_DURING_HISTORY_REPAIR`, `HISTORY_LATE_ITEM`, `CONVERSATION_CLOSED`.
+
 ## Próxima evolución: modelos y proveedores seleccionables
 
 **Propuesta pendiente; no implementada.** El objetivo cercano es seleccionar
