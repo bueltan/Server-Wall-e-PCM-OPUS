@@ -70,6 +70,12 @@ class VadXai(TaggedXai):
                 self.done[token] = asyncio.Event()
                 self.response_ids[token] = message.get('response', {}).get('id')
         token = self.responses.get(message.get('response', {}).get('id', message.get('response_id')))
+        if kind == 'response.done' and token is not None:
+            # The terminal snapshot may identify output whose incremental event
+            # never arrived. Include it before declaring an early response empty.
+            for item in message.get('response', {}).get('output', []):
+                await super().handle_event({'type': 'response.output_item.added',
+                    'response_id': self.response_ids[token], 'item': item})
         await super().handle_event(message)
         if kind in ("response.output_item.added", "response.output_audio.delta", "response.done"):
             self.history_changed.set()
@@ -83,7 +89,8 @@ class VadXai(TaggedXai):
                 if old!=self.latest_response_id and self.provider_done[old].is_set():
                     self.provider_done.pop(old,None)
 
-    async def repair_history(self, token, played_ms, manual=False, phase=None):
+    async def repair_history(self, token, played_ms, manual=False, phase=None,
+                             cancel_if_missing=True):
         """Preserve the new user audio. Never clear it on a VAD interruption."""
         if token is None: return
         self.cancel_identity = token
@@ -98,7 +105,22 @@ class VadXai(TaggedXai):
                 self.history_changed.clear()
                 await self.history_changed.wait()
         if phase: phase("item_wait")
-        await asyncio.wait_for(wait_item(),self.config.history_item_timeout_sec)
+        try:
+            await asyncio.wait_for(wait_item(),self.config.history_item_timeout_sec)
+        except TimeoutError:
+            if not cancel_if_missing or manual:
+                raise
+            # VAD normally cancels generation itself. An early response can stall
+            # before producing an item; cancel that exact response as a fallback.
+            if phase: phase("cancel_missing_output")
+            event('XAI_CANCEL_FALLBACK', token,
+                  response_id=self.response_ids.get(token), reason='missing_output')
+            await self.cancel_response(token)
+            if phase: phase("cancel_confirmation")
+            await asyncio.wait_for(wait_item(),self.config.history_item_timeout_sec)
+        if not self.items.get(token):
+            event('HISTORY_EMPTY_CONFIRMED', token,
+                  response_id=self.response_ids.get(token))
         if phase: phase("history_confirmation")
         remaining = max(0, played_ms)
         processed=set()

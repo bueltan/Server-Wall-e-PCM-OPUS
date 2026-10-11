@@ -65,14 +65,22 @@ Los plazos son independientes y configurables: `history_repair_timeout_sec`
 (4 s para toda la transacción), `history_item_timeout_sec` (1 s para conocer el
 mensaje interrumpido) y `history_confirmation_timeout_sec` (1 s por confirmación).
 Con un mensaje identificado se intenta reparar sin exigir antes `response.done`.
-Sin mensaje se espera su llegada o el fin de respuesta, siempre con límite.
+Sin mensaje se espera su llegada o el fin de respuesta. Si vence ese primer plazo
+para una interrupción VAD, se envía `response.cancel` con el ID de esa respuesta
+y se espera como máximo otro `history_item_timeout_sec`, dentro del límite total
+de 4 s. Una cancelación manual no repite ese envío. El fin sin mensajes confirma
+un historial vacío; si el evento final incluye mensajes, también se reparan.
+Una interrupción confirmada conserva la conversación, el contexto escuchado y
+la entrada nueva; no envía `input_audio_buffer.clear`. La falta de confirmación
+sigue cerrando la sesión por historial incierto.
 Los mensajes no se retiran del registro antes de confirmar su reparación.
 
 Una respuesta nueva antes de confirmar el historial, o un mensaje nuevo tardío
 de una respuesta ya reparada, cierra la sesión con motivo explícito; bloquear
 solo su reproducción no garantiza que se haya generado con el contexto correcto.
 Logs útiles: `INTERRUPT_BEGIN`, `INTERRUPT_MERGED`, `INTERRUPT_PLAYBACK_ACK`,
-`INTERRUPT_COMPLETE`, `HISTORY_REPAIR_FAILED` (fase y tiempo),
+`INTERRUPT_COMPLETE`, `XAI_CANCEL_FALLBACK`, `HISTORY_EMPTY_CONFIRMED`,
+`HISTORY_REPAIR_FAILED` (fase y tiempo),
 `RESPONSE_DURING_HISTORY_REPAIR`, `HISTORY_LATE_ITEM`, `CONVERSATION_CLOSED`.
 
 ## Próxima evolución: modelos y proveedores seleccionables

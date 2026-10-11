@@ -298,6 +298,91 @@ class SessionTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(self.s.xai.history_ready.is_set())
         self.assertFalse(any(p.kind==Kind.OPUS and p.identity==token for p in self.s.transport.sent))
 
+    async def early_interruption(self):
+        self.s.xai.config=replace(self.s.xai.config,history_item_timeout_sec=.01)
+        await self.s.xai.handle_event({'type':'response.created','response':{'id':'early'}})
+        token=self.s.conversation.response
+        await self.s.xai.handle_event({'type':'input_audio_buffer.speech_started'})
+        await self.ack_events(0)
+        return token
+
+    async def finish_repair(self):
+        async def finished():
+            while self.s.interruptions.pending: await asyncio.sleep(.001)
+        await asyncio.wait_for(finished(),1)
+
+    async def test_early_vad_cancellation_keeps_conversation_and_next_response(self):
+        token=await self.early_interruption()
+        await self.finish_repair()
+        cancels=[p for p in self.provider.calls if p['type']=='response.cancel']
+        self.assertEqual(cancels,[{'type':'response.cancel','response_id':'early'}])
+        self.assertEqual(self.s.conversation.identity,self.i)
+        self.assertEqual(self.s.conversation.phase,Phase.LISTENING)
+        self.assertTrue(self.s.xai.history_ready.is_set())
+        self.assertFalse(self.provider.closed)
+        self.assertFalse(any(p.kind in (Kind.ERROR,Kind.CANCEL_ACK) for p in self.s.transport.sent))
+        self.assertFalse(any(p.kind==Kind.OPUS and p.identity==token for p in self.s.transport.sent))
+        self.deliver(Kind.PCM,self.i,0,self.s.pcm_packet_format.pack_audio_packet(0,0,320,bytes(640)))
+        await settle()
+        self.assertTrue(any(p['type']=='input_audio_buffer.append' for p in self.provider.calls))
+        self.assertFalse(any(p['type']=='input_audio_buffer.clear' for p in self.provider.calls))
+        next_token=await self.response('next');await self.ack_events()
+        self.assertGreater(next_token.response,token.response)
+        self.assertTrue(any(p.kind==Kind.OPUS and p.identity==next_token for p in self.s.transport.sent))
+
+    async def test_early_vad_terminal_without_output_needs_no_fallback(self):
+        await self.early_interruption()
+        await self.s.xai.handle_event({'type':'response.done','response':{'id':'early','status':'cancelled','output':[]}})
+        await self.finish_repair()
+        self.assertFalse(any(p['type']=='response.cancel' for p in self.provider.calls))
+        self.assertEqual(self.s.conversation.identity,self.i)
+        self.assertTrue(self.s.xai.history_ready.is_set())
+
+    async def test_early_cancel_repairs_items_in_terminal_snapshot(self):
+        original_send=self.provider.send
+        async def terminal_output(raw):
+            payload=json.loads(raw)
+            if payload['type']=='response.cancel':
+                self.provider.calls.append(payload)
+                await self.s.xai.handle_event({'type':'response.done','response':{
+                    'id':'early','status':'cancelled','output':[{'id':'snapshot-item','role':'assistant'}]}})
+            else: await original_send(raw)
+        self.provider.send=terminal_output
+        await self.early_interruption();await self.finish_repair()
+        self.assertTrue(any(p['type']=='conversation.item.delete' and p['item_id']=='snapshot-item'
+                            for p in self.provider.calls))
+        self.assertEqual(self.s.conversation.identity,self.i)
+        self.assertTrue(self.s.xai.history_ready.is_set())
+
+    async def test_early_cancel_can_repair_concrete_item_without_terminal(self):
+        original_send=self.provider.send
+        async def cancel_item(raw):
+            payload=json.loads(raw)
+            if payload['type']=='response.cancel':
+                self.provider.calls.append(payload)
+                await self.s.xai.handle_event({'type':'response.output_item.added',
+                    'response_id':'early','item':{'id':'cancel-item','role':'assistant'}})
+            else: await original_send(raw)
+        self.provider.send=cancel_item
+        await self.early_interruption();await self.finish_repair()
+        self.assertTrue(any(p['type']=='conversation.item.delete' and p['item_id']=='cancel-item'
+                            for p in self.provider.calls))
+        self.assertEqual(self.s.conversation.identity,self.i)
+        self.assertTrue(self.s.xai.history_ready.is_set())
+
+    async def test_early_cancel_without_any_confirmation_remains_unsafe(self):
+        original_send=self.provider.send
+        async def ignore_cancel(raw):
+            payload=json.loads(raw)
+            if payload['type']=='response.cancel': self.provider.calls.append(payload)
+            else: await original_send(raw)
+        self.provider.send=ignore_cancel
+        await self.early_interruption();await self.finish_repair()
+        self.assertEqual(sum(p['type']=='response.cancel' for p in self.provider.calls),1)
+        self.assertIsNone(self.s.conversation.identity)
+        self.assertTrue(self.provider.closed)
+        self.assertTrue(any(p.kind==Kind.ERROR for p in self.s.transport.sent))
+
     async def test_wake_and_vad_share_one_repair(self):
         token=await self.response(count=4);await self.ack_events()
         await self.s.xai.handle_event({'type':'input_audio_buffer.speech_started'})

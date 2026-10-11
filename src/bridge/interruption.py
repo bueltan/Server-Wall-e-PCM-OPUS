@@ -70,7 +70,8 @@ class InterruptionCoordinator:
         event('INTERRUPT_PLAYBACK_ACK', repair.token, played_ms=played)
         repair.phase = 'history_confirmation'
         await self.session.xai.repair_history(repair.token, played,
-            phase=lambda value: setattr(repair,"phase",value))
+            phase=lambda value: setattr(repair,"phase",value),
+            cancel_if_missing=not repair.manual)
 
     async def close(self):
         current = asyncio.current_task()
