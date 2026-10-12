@@ -2,10 +2,14 @@
 
 ## 2026-10-12
 
+- Add bounded Opus resend caching, per-response downlink NACK and recovery metrics.
+- Retry audio END until receipt ACK; fail explicitly on unconfirmed termination.
+- Advertise the downlink capability and invalidate recovery on cancellation/reset.
+
 - Correlate xAI operation errors without terminating the event receiver.
 - Preserve VAD conversations on explicit already-cancelled or already-deleted outcomes.
 - Log provider error details and add interruption recovery regression tests.
-
+git 
 ## 2026-10-11
 
 - Extend bounded uplink NACK recovery and expose successful retries, expiry and recovery counters.

@@ -112,6 +112,38 @@ class SessionTests(unittest.IsolatedAsyncioTestCase):
         await self.s.xai.handle_event({'type':'response.done','response':{'id':name,'status':'completed'}})
         return token
 
+    async def test_unconfirmed_end_fails_instead_of_reporting_played(self):
+        token=await self.response();await self.ack_events();await settle()
+        self.s.downlink.config=replace(self.s.config,output_end_timeout_sec=.01)
+        task=asyncio.create_task(self.s.recover_output());self.s.tasks.append(task)
+        for _ in range(30):
+            if self.s.conversation.identity is None and self.provider.closed: break
+            await asyncio.sleep(.01)
+        self.assertIsNone(self.s.conversation.identity)
+        self.assertTrue(self.provider.closed)
+        self.assertTrue(any(p.kind==Kind.ERROR and p.identity.turn==token.turn for p in self.s.transport.sent))
+
+    async def test_downlink_real_pipeline_recovery_end_ack_and_stale_ids(self):
+        token=await self.response(count=4);await self.ack_events();await settle()
+        packets=[p for p in self.s.transport.sent if p.kind==Kind.OPUS and p.identity==token]
+        self.assertEqual(len(packets),4)
+        end=[p for p in self.s.transport.sent if p.kind==Kind.AUDIO_END][-1]
+        self.assertEqual(end.sequence,4)
+        self.deliver(Kind.DOWNLINK_NACK,token,1,struct.pack('!IH',1,3))
+        self.s.downlink.poll()
+        repeated=[p for p in self.s.transport.sent if p.kind==Kind.OPUS and p.identity==token][4:]
+        self.assertEqual(repeated,packets[1:3])
+        self.deliver(Kind.AUDIO_END_ACK,token,4)
+        self.assertIsNone(self.s.downlink.end)
+        # END receipt does not mark playback finished or remove response identity.
+        self.assertEqual(self.s.conversation.response,token)
+        await self.s.xai.handle_event({'type':'input_audio_buffer.speech_started'})
+        await self.ack_events(0)
+        before=len(self.s.transport.sent)
+        self.deliver(Kind.DOWNLINK_NACK,token,1,struct.pack('!IH',1,3))
+        self.s.downlink.poll()
+        self.assertEqual(len(self.s.transport.sent),before)
+
     async def test_pcm_during_response_and_next_response_ids(self):
         token=await self.response();await settle()
         self.assertFalse(any(p.kind==Kind.OPUS for p in self.s.transport.sent))

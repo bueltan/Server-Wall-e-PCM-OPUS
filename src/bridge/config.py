@@ -71,6 +71,12 @@ class BridgeConfig:
     output_end_repeat_count: int = 5
     output_end_repeat_interval: float = 0.02
 
+    # Bounded downlink recovery: cache is on the server, CORE keeps its jitter buffer.
+    output_cache_frames: int = 128
+    output_cache_ttl_sec: float = 3.0
+    output_end_retry_sec: float = 0.15
+    output_end_timeout_sec: float = 5.0
+
     # Debug recordings
     save_input_wav: bool = True
     save_output_wav: bool = True

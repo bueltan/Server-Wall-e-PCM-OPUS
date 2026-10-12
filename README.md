@@ -269,3 +269,45 @@ nueva respuesta, errores no recuperables y supervivencia del receptor. En el VPS
 se requiere una nueva captura para conocer el mensaje exacto de los rechazos
 anteriores y comprobar que corresponden a los casos manejados.
 Referencia: https://docs.x.ai/developers/rest-api-reference/inference/voice
+
+## Bounded downlink recovery and reliable audio END
+
+Deploy this backend and the matching CORE firmware together. UDP v3 HELLO_ACK
+advertises downlink recovery with flag `0x02` (flag `0x01` retains admission
+readiness). CORE refuses a server without this capability. New envelope kinds:
+`DOWNLINK_NACK=22`, `AUDIO_END=23`, `AUDIO_END_ACK=24`. Legacy v1/v2 and the
+reference managed-session implementation are unchanged.
+
+`DownlinkRecovery` owns only the bounded resend cache and END receipt tracking.
+The audio pipeline owns encoding/pacing; `ContinuousSession` validates identity,
+services recovery every 20 ms and retains lifecycle/cancellation ownership.
+NACK carries a big-endian uint32 base and uint16 mask (eight valid bits); the
+header sequence must equal its base. All recovery traffic is scoped to the
+active client/server/conversation/response. Cancel/reset clears pending work.
+
+Defaults: 128 cached Opus frames, original-send TTL 3 seconds, one retransmit
+attempt per frame, at most two retransmissions per 20 ms cycle, pending queue
+32 entries. CORE retains its current jitter buffer; it waits 40 ms for reordering
+and requests only useful future frames (at least 160 ms lead during normal
+playback). Late recovery falls back to existing FEC/PLC. A lost NACK is not retried.
+Cache RAM is on the server; CORE adds bounded sequence metadata, not audio copies.
+
+AUDIO_END carries the existing Opus END body and exclusive final sequence.
+The server resends it every 150 ms until AUDIO_END_ACK. Receipt does not mean
+playback completion: PLAYED/PLAYED_ACK still confirms completion after estimated
+DMA drain. END retries expire after 5 seconds with explicit
+`output_end_unconfirmed`, never a fabricated completion. CORE allows 400 ms for
+missing tail recovery before concealment through the known boundary. Without
+END, a stalled stream remains a failure. Heartbeat limits are unchanged.
+
+Tune server bounds in `BridgeConfig`: `output_cache_frames`,
+`output_cache_ttl_sec`, `output_end_retry_sec`, `output_end_timeout_sec`.
+`OUTPUT_RECOVERY_STATS` and `OUTPUT_RECOVERY_COMPLETE` report requested frames,
+retransmissions, cache misses/expiry, repeated requests, queue saturation, local
+send failures and END sends/ACKs. Correlate with CORE `DOWNLINK_RECOVERY`,
+`OUTPUT_END_ACK`, `OUTPUT_END_TIMEOUT`, and `PLAYBACK_FINISHED`.
+
+Offline tests cover bounded retransmission, cache age/eviction, stale identities,
+loss/retry of END and its ACK, cancellation, tail grace and real Opus pipeline
+integration. Hardware validation still needs packet loss/reordering tests and
+confirmation that playback completes when the first END or ACK is lost.

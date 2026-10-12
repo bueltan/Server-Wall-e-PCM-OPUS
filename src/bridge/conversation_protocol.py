@@ -32,6 +32,9 @@ class Kind(IntEnum):
     INTERRUPT_ACK=19
     PLAYED=20
     PLAYED_ACK=21
+    DOWNLINK_NACK=22
+    AUDIO_END=23
+    AUDIO_END_ACK=24
 
 @dataclass(frozen=True)
 class Identity:

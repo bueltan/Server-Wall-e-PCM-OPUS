@@ -30,6 +30,7 @@ class AudioPipeline:
         return AudioPacer(self.config.output_send_interval_sec,self.config.output_pacing_max_lag_sec)
 
     def reset_output(self):
+        if hasattr(self,'downlink'): self.downlink.reset()
         self.output_pacer=self.new_pacer()
         self.output_sequence = self.output_pts_samples = 0
         self.output_pending_pcm.clear()
@@ -59,11 +60,14 @@ class AudioPipeline:
                 if not self.output_valid(token): continue
                 await self.output_pacer.wait()
                 if not self.output_valid(token): continue
-                for i in range(self.config.output_end_repeat_count):
-                    if not self.output_valid(token): break
-                    inner=self.opus_packet_format.pack_end_packet(self.output_sequence,self.output_pts_samples)
-                    self._send(Kind.OPUS,token,self.output_sequence,inner)
-                    if i+1<self.config.output_end_repeat_count: await asyncio.sleep(self.config.output_end_repeat_interval)
+                inner=self.opus_packet_format.pack_end_packet(self.output_sequence,self.output_pts_samples)
+                if hasattr(self,'downlink'):
+                    self.downlink.finish(token,self.output_sequence,inner)
+                else:
+                    for i in range(self.config.output_end_repeat_count):
+                        if not self.output_valid(token): break
+                        self._send(Kind.OPUS,token,self.output_sequence,inner)
+                        if i+1<self.config.output_end_repeat_count: await asyncio.sleep(self.config.output_end_repeat_interval)
                 if not self.output_valid(token): continue
                 self.output_active=False;self.output_finished=True;self.output_recorder.close()
                 event("OUTPUT_END",token,final_seq=self.output_sequence,pts=self.output_pts_samples)
@@ -91,6 +95,8 @@ class AudioPipeline:
             await pacer.wait()
             # Cancellation/reset can happen while sleeping. Never send old audio.
             if not self.output_valid(token) or pacer is not self.output_pacer: return
+            if hasattr(self,'downlink'):
+                self.downlink.remember(token,self.output_sequence,inner)
             self._send(Kind.OPUS,token,self.output_sequence,inner)
             pacer.sent()
             self.counters["opus_frames"]+=1
