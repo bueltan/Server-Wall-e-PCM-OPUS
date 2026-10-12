@@ -5,6 +5,7 @@ import json
 import time
 from .diagnostics import event as log_event
 from .xai import XaiRealtimeBridge
+from .operation_errors import ProviderOperationError, already_absent
 
 class TaggedXai(XaiRealtimeBridge):
     def __init__(self, config, queue, valid):
@@ -17,12 +18,16 @@ class TaggedXai(XaiRealtimeBridge):
         self.responses={}
         self.items={}
         self.confirmations={}
+        self.pending_operations={}
+        self.operation_sequence=0
+        self.recent_operations={}
         self.output_done=set()
         self.audio_totals={}
         self.response_requested_at=0.0
         self.cancel_identity=None
 
     async def connect(self):
+        self._clear_operations();self.recent_operations.clear()
         self.ready_event.clear();self.pending=None;self.responses.clear()
         self.items.clear();self.output_done.clear();self.generation_done.set()
         await super().connect()
@@ -46,12 +51,33 @@ class TaggedXai(XaiRealtimeBridge):
                 await self.close()
                 raise
 
+    def _clear_operations(self):
+        for _,future in self.pending_operations.values():
+            if not future.done(): future.cancel()
+        self.pending_operations.clear();self.confirmations.clear()
+
+    def _begin_operation(self, payload):
+        self.operation_sequence+=1
+        payload=dict(payload,event_id=f'piuu-op-{self.operation_sequence}')
+        future=asyncio.get_running_loop().create_future()
+        # Cancellation can be acknowledged after its history item arrives.
+        # Retrieve exceptions even if the transaction itself is subsequently cancelled.
+        future.add_done_callback(lambda f: f.exception() if not f.cancelled() else None)
+        self.pending_operations[payload['event_id']]=(payload,future)
+        self.recent_operations[payload['event_id']]=payload
+        while len(self.recent_operations)>64:
+            self.recent_operations.pop(next(iter(self.recent_operations)))
+        return payload,future
+
+    def _accept_operation_error(self, payload, error):
+        return payload['type']=='conversation.item.delete' and already_absent(error)
+
     async def _confirmed(self, payload, event, item=''):
-        future=asyncio.get_running_loop().create_future();key=(event,item)
+        payload,future=self._begin_operation(payload);key=(event,item)
         self.confirmations[key]=future
         started=time.monotonic()
         log_event("XAI_OPERATION",self.cancel_identity,operation=payload['type'],item=item,
-                  audio_end_ms=payload.get('audio_end_ms'))
+                  audio_end_ms=payload.get('audio_end_ms'),event_id=payload['event_id'])
         try:
             await self._safe_send(payload)
             await asyncio.wait_for(future,self.config.history_confirmation_timeout_sec)
@@ -59,6 +85,7 @@ class TaggedXai(XaiRealtimeBridge):
                       elapsed_ms=round((time.monotonic()-started)*1000))
         finally:
             self.confirmations.pop(key,None)
+            self.pending_operations.pop(payload['event_id'],None)
 
     async def cancel_turn(self, token, played_ms):
         async with self.operation_lock:
@@ -161,9 +188,27 @@ class TaggedXai(XaiRealtimeBridge):
                     self.output_done.add(token);self.output_pcm_queue.put_nowait((token,None))
         elif kind=='error':
             error=event.get('error',{})
-            log_event('XAI_ERROR',code=error.get('code'),error_type=error.get('type'),event_id=error.get('event_id'))
-            raise RuntimeError(f"xAI rejected operation code={error.get('code')}")
+            request_id=error.get('event_id')
+            operation=self.pending_operations.get(request_id)
+            correlation='event_id'
+            if operation is None and len(self.pending_operations)==1 and request_id not in self.recent_operations:
+                # Some provider errors omit/replace the originating event ID.
+                operation=next(iter(self.pending_operations.values()));correlation='single_pending'
+            payload,future=operation if operation else (self.recent_operations.get(request_id),None)
+            log_event('XAI_ERROR',code=error.get('code'),error_type=error.get('type'),
+                      event_id=request_id,param=error.get('param'),message=str(error.get('message',''))[:512],
+                      operation=payload.get('type') if payload else None,correlation=correlation)
+            if payload and self._accept_operation_error(payload,error):
+                log_event('XAI_OPERATION_RECOVERED',self.cancel_identity,operation=payload['type'],
+                          event_id=payload['event_id'],code=error.get('code'))
+                if future is not None and not future.done(): future.set_result(event)
+                return
+            if future is not None:
+                if not future.done(): future.set_exception(ProviderOperationError(payload,error))
+                return  # transaction decides recovery; keep receiving confirmations/events
+            raise RuntimeError(f"xAI rejected operation code={error.get('code')}: {error.get('message','')}")
 
     async def close(self):
+        self._clear_operations()
         self.ready_event.clear()
         await super().close()

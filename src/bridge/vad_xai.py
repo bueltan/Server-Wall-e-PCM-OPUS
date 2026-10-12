@@ -2,6 +2,7 @@
 import asyncio
 import time
 from .tagged_xai import TaggedXai
+from .operation_errors import no_active_response
 from .diagnostics import event
 
 class VadXai(TaggedXai):
@@ -16,12 +17,14 @@ class VadXai(TaggedXai):
         self.response_ids = {}
         self.history_changed = asyncio.Event()
         self.repaired_responses = {}
+        self.cancel_operations = {}
 
     def turn_detection(self):
         return {'type': 'server_vad'}
 
     async def connect(self):
         self.done.clear(); self.response_ids.clear(); self.provider_done.clear()
+        self.cancel_operations.clear()
         self.repaired_responses.clear(); self.history_changed.clear()
         self.latest_response_id=None; self.pause_count=0; self.history_ready.set()
         await super().connect()
@@ -45,7 +48,28 @@ class VadXai(TaggedXai):
         if done and not done.is_set():
             response_id=self.response_ids[token]
             event('XAI_RESPONSE_CANCEL',token,response_id=response_id)
-            await self._safe_send({'type':'response.cancel','response_id':response_id})
+            if token in self.cancel_operations: return
+            payload,future=self._begin_operation({'type':'response.cancel','response_id':response_id})
+            self.cancel_operations[token]=(payload['event_id'],future)
+            await self._safe_send(payload)
+
+    def _accept_operation_error(self, payload, error):
+        if payload['type']=='response.cancel' and no_active_response(error):
+            response_id=payload.get('response_id')
+            token=self.responses.get(response_id)
+            if token in self.done: self.done[token].set()
+            if response_id==self.latest_response_id: self.generation_done.set()
+            if response_id in self.provider_done: self.provider_done[response_id].set()
+            self.history_changed.set()
+            return True
+        return super()._accept_operation_error(payload,error)
+
+    async def repair_history(self, token, played_ms, manual=False, phase=None, cancel_if_missing=True):
+        try:
+            return await self._repair_history(token,played_ms,manual,phase,cancel_if_missing)
+        finally:
+            operation=self.cancel_operations.pop(token,None)
+            if operation: self.pending_operations.pop(operation[0],None)
 
     async def handle_event(self, message):
         kind = message.get('type')
@@ -77,7 +101,7 @@ class VadXai(TaggedXai):
                 await super().handle_event({'type': 'response.output_item.added',
                     'response_id': self.response_ids[token], 'item': item})
         await super().handle_event(message)
-        if kind in ("response.output_item.added", "response.output_audio.delta", "response.done"):
+        if kind in ("response.output_item.added", "response.output_audio.delta", "response.done", "error"):
             self.history_changed.set()
         if kind == 'response.done':
             event('XAI_USAGE',token,billable_audio_seconds=message.get('response',{}).get('usage',{}).get('billable_audio_seconds'))
@@ -89,8 +113,8 @@ class VadXai(TaggedXai):
                 if old!=self.latest_response_id and self.provider_done[old].is_set():
                     self.provider_done.pop(old,None)
 
-    async def repair_history(self, token, played_ms, manual=False, phase=None,
-                             cancel_if_missing=True):
+    async def _repair_history(self, token, played_ms, manual=False, phase=None,
+                              cancel_if_missing=True):
         """Preserve the new user audio. Never clear it on a VAD interruption."""
         if token is None: return
         self.cancel_identity = token
@@ -98,8 +122,13 @@ class VadXai(TaggedXai):
         # A concrete item can be repaired without depending on response.done.
         # If interrupted immediately after response.created, wait for either an
         # item to identify or a terminal response proving no output remains.
+        def check_cancel_error():
+            operation=self.cancel_operations.get(token)
+            if operation and operation[1].done(): operation[1].result()
         async def wait_item():
+            check_cancel_error()
             while not self.items.get(token):
+                check_cancel_error()
                 done=self.done.get(token)
                 if done is None or done.is_set(): return
                 self.history_changed.clear()
@@ -159,6 +188,7 @@ class VadXai(TaggedXai):
 
     async def close(self):
         # Bound shutdown even when the peer stops answering the close handshake.
+        self._clear_operations();self.cancel_operations.clear()
         self.ready_event.clear();self.connected_event.clear()
         ws=self.ws;self.ws=None
         if ws is None: return

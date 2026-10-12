@@ -242,3 +242,30 @@ buffered frames, normal pipeline drops and startup drops separately.
 Audio still uses 20 ms frames and individual provider appends. Provider batching
 (e.g. 80 ms) is a separate possible optimization; it does not define a minimum
 speech duration or change server VAD endpointing/interruption policy.
+
+### Interrupciones tempranas y errores del proveedor
+
+Una pausa natural puede hacer que server_vad empiece una respuesta y la cancele
+cuando continúa la grabación. El cambio Thinking → Listening representa esa
+interrupción; no debe cerrar por sí solo la conversación.
+
+Las operaciones de cancelación y edición del historial llevan `event_id` para
+correlacionar rechazos con su transacción. `XAI_ERROR` registra código, mensaje
+(hasta 512 caracteres), parámetro, operación y método de correlación. Si el
+proveedor no devuelve el ID solicitado, se puede atribuir el error a una única
+operación pendiente. Un error de operación identificado despierta la transacción
+inmediatamente; el receptor WebSocket continúa leyendo eventos y confirmaciones.
+
+La respuesta explícita «no hay respuesta activa» a `response.cancel`, y «el item
+no existe» a `conversation.item.delete`, satisfacen esas operaciones idempotentes.
+`XAI_OPERATION_RECOVERED` registra estos casos; se retoma la entrada sin limpiar
+el nuevo audio del usuario. No se interpreta un `invalid_request_error` genérico
+como éxito. Los rechazos ambiguos y plazos sin confirmación conservan el cierre
+por `history_uncertain`, evitando continuar con historial sin verificar.
+
+Los límites de reparación y la política de descarte ante saturación no cambian.
+Las pruebas offline cubren ambos resultados recuperables, continuación con una
+nueva respuesta, errores no recuperables y supervivencia del receptor. En el VPS
+se requiere una nueva captura para conocer el mensaje exacto de los rechazos
+anteriores y comprobar que corresponden a los casos manejados.
+Referencia: https://docs.x.ai/developers/rest-api-reference/inference/voice

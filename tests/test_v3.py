@@ -344,7 +344,9 @@ class SessionTests(unittest.IsolatedAsyncioTestCase):
         token=await self.early_interruption()
         await self.finish_repair()
         cancels=[p for p in self.provider.calls if p['type']=='response.cancel']
-        self.assertEqual(cancels,[{'type':'response.cancel','response_id':'early'}])
+        self.assertEqual([{k:v for k,v in p.items() if k!='event_id'} for p in cancels],
+            [{'type':'response.cancel','response_id':'early'}])
+        self.assertTrue(cancels[0]['event_id'])
         self.assertEqual(self.s.conversation.identity,self.i)
         self.assertEqual(self.s.conversation.phase,Phase.LISTENING)
         self.assertTrue(self.s.xai.history_ready.is_set())
@@ -412,6 +414,62 @@ class SessionTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(self.provider.closed)
         self.assertTrue(any(p.kind==Kind.ERROR for p in self.s.transport.sent))
 
+    async def test_vad_already_cancelled_response_preserves_conversation_and_new_audio(self):
+        original_send=self.provider.send
+        async def reject_cancel(raw):
+            payload=json.loads(raw)
+            if payload['type']=='response.cancel':
+                self.provider.calls.append(payload)
+                await self.s.xai.handle_event({'type':'error','error':{
+                    'code':'invalid_request_error','message':'No active response to cancel',
+                    'event_id':payload['event_id']}})
+            else: await original_send(raw)
+        self.provider.send=reject_cancel
+        await self.early_interruption();await self.finish_repair()
+        self.assertEqual(self.s.conversation.identity,self.i)
+        self.assertFalse(self.provider.closed)
+        self.assertTrue(self.s.xai.history_ready.is_set())
+        self.assertFalse(self.s.xai.pending_operations)
+        self.deliver(Kind.PCM,self.i,0,self.s.pcm_packet_format.pack_audio_packet(0,0,320,bytes(640)))
+        await settle()
+        self.assertTrue(any(p['type']=='input_audio_buffer.append' for p in self.provider.calls))
+        self.assertFalse(any(p['type']=='input_audio_buffer.clear' for p in self.provider.calls))
+        await self.response('after-pause');await self.ack_events()
+        self.assertEqual(self.s.conversation.identity,self.i)
+
+    async def test_vad_already_removed_unheard_item_preserves_conversation(self):
+        await self.s.xai.handle_event({'type':'response.created','response':{'id':'early'}})
+        await self.s.xai.handle_event({'type':'response.output_item.added','response_id':'early',
+            'item':{'id':'removed-item','role':'assistant'}})
+        original_send=self.provider.send
+        async def reject_delete(raw):
+            payload=json.loads(raw)
+            if payload['type']=='conversation.item.delete':
+                self.provider.calls.append(payload)
+                await self.s.xai.handle_event({'type':'error','error':{
+                    'code':'invalid_request_error','message':'Item removed-item does not exist',
+                    'event_id':payload['event_id']}})
+            else: await original_send(raw)
+        self.provider.send=reject_delete
+        await self.s.xai.handle_event({'type':'input_audio_buffer.speech_started'})
+        await self.ack_events(0);await self.finish_repair()
+        self.assertEqual(self.s.conversation.identity,self.i)
+        self.assertTrue(self.s.xai.history_ready.is_set());self.assertFalse(self.provider.closed)
+        self.assertFalse(self.s.xai.pending_operations)
+
+    async def test_ambiguous_cancel_rejection_still_requires_confirmed_history(self):
+        original_send=self.provider.send
+        async def reject_cancel(raw):
+            payload=json.loads(raw)
+            if payload['type']=='response.cancel':
+                await self.s.xai.handle_event({'type':'error','error':{
+                    'code':'invalid_request_error','message':'Invalid response_id parameter',
+                    'event_id':payload['event_id']}})
+            else: await original_send(raw)
+        self.provider.send=reject_cancel
+        await self.early_interruption();await self.finish_repair()
+        self.assertIsNone(self.s.conversation.identity);self.assertTrue(self.provider.closed)
+
     async def test_wake_and_vad_share_one_repair(self):
         token=await self.response(count=4);await self.ack_events()
         await self.s.xai.handle_event({'type':'input_audio_buffer.speech_started'})
@@ -477,7 +535,7 @@ class SessionTests(unittest.IsolatedAsyncioTestCase):
         await self.s.xai.handle_event({'type':'input_audio_buffer.speech_started'})
         await self.ack_events(20)
         async def closed():
-            while not self.provider.closed: await asyncio.sleep(.001)
+            while not self.provider.closed or self.s.interruptions.pending: await asyncio.sleep(.001)
         await asyncio.wait_for(closed(),1)
         self.assertFalse(self.s.interruptions.pending)
         self.assertFalse(self.s.xai.confirmations)

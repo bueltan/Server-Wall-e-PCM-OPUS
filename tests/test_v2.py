@@ -165,7 +165,7 @@ class XaiTests(unittest.IsolatedAsyncioTestCase):
     async def test_cancel_confirms_truncate_delete_clear(self):
         await self.generation();self.active=None
         self.assertTrue(await self.x.cancel_turn(self.token,50))
-        operations=[e for e in self.x.ws.sent if e['type'].startswith('conversation.')]
+        operations=[{k:v for k,v in e.items() if k!='event_id'} for e in self.x.ws.sent if e['type'].startswith('conversation.')]
         self.assertEqual(operations,[{'type':'conversation.item.truncate','item_id':'a','content_index':0,'audio_end_ms':50},
             {'type':'conversation.item.delete','item_id':'b'}])
         self.assertEqual(self.x.ws.sent[-1]['type'],'input_audio_buffer.clear')
@@ -176,7 +176,24 @@ class XaiTests(unittest.IsolatedAsyncioTestCase):
             'item':{'id':'unheard','role':'assistant'}})
         self.active=None
         self.assertTrue(await self.x.cancel_turn(self.token,0))
-        self.assertIn({'type':'conversation.item.delete','item_id':'unheard'},self.x.ws.sent)
+        self.assertTrue(any(e['type']=='conversation.item.delete' and e.get('item_id')=='unheard' for e in self.x.ws.sent))
+
+    async def test_scoped_error_keeps_receiver_alive_and_reports_full_operation(self):
+        from bridge.operation_errors import ProviderOperationError
+        original_send=self.x.ws.send
+        async def reject(raw):
+            payload=json.loads(raw)
+            if payload['type']=='conversation.item.delete':
+                self.x.ws.events.put_nowait({'type':'error','error':{'code':'invalid_request_error',
+                    'message':'Deletion refused for this item', 'event_id':payload['event_id']}})
+            else: await original_send(raw)
+        self.x.ws.send=reject
+        with self.assertRaises(ProviderOperationError) as failure:
+            await self.x._confirmed({'type':'conversation.item.delete','item_id':'x'},'conversation.item.deleted','x')
+        self.assertIn('Deletion refused',str(failure.exception))
+        self.assertFalse(self.task.done())
+        await self.x._confirmed({'type':'input_audio_buffer.clear'},'input_audio_buffer.cleared')
+        self.assertEqual(self.x.pending_operations,{})
 
     async def test_finished_response_can_still_be_truncated(self):
         await self.generation();await self.emit({'type':'response.done','response':{'id':'r1'}})
