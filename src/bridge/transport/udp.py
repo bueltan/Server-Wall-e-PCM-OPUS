@@ -4,8 +4,8 @@ Single-session admission for now. A future registry can create one ContinuousSes
 per peer, each with its own xAI connection, queues, encoder and recordings.
 """
 import asyncio
-from .config import BridgeConfig
-from .continuous_session import ContinuousSession
+from bridge.config import BridgeConfig
+from bridge.conversation.session import ContinuousSession
 
 class UdpAudioBridgeProtocol(asyncio.DatagramProtocol):
     def __init__(self, config: BridgeConfig, session_factory=ContinuousSession):

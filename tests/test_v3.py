@@ -6,10 +6,10 @@ import struct
 import unittest
 from dataclasses import replace
 from bridge.config import BridgeConfig
-from bridge.continuous_session import ContinuousSession
-from bridge.conversation import Conversation, Phase
-from bridge.conversation_protocol import Identity, Packet, Kind, Event, encode, decode
-from bridge.reliable_events import ReliableEvents
+from bridge.conversation.session import ContinuousSession
+from bridge.conversation.state import Conversation, Phase
+from bridge.transport.protocols.conversation import Identity, Packet, Kind, Event, encode, decode
+from bridge.transport.reliable_events import ReliableEvents
 
 class Transport:
     def __init__(self): self.sent=[]
@@ -34,7 +34,7 @@ async def settle():
 
 class ModelTests(unittest.TestCase):
     def test_startup_buffer_has_a_hard_limit(self):
-        from bridge.startup_audio import StartupAudio
+        from bridge.audio.startup_audio import StartupAudio
         b=StartupAudio(2)
         self.assertTrue(b.admit(b'first'));self.assertTrue(b.admit(b'second'))
         self.assertFalse(b.admit(b'extra'));self.assertEqual(b.dropped,1)

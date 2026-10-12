@@ -1,7 +1,7 @@
 """One bounded, ordered input worker per client session. No network dependencies."""
 import asyncio
 from collections import Counter
-from .diagnostics import event
+from bridge.diagnostics.logging import event
 from dataclasses import dataclass
 from typing import Awaitable, Callable
 

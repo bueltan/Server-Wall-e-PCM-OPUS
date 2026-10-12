@@ -1,6 +1,6 @@
 """Provider-independent identities/state. No sockets, audio buffers or UI."""
 from enum import Enum
-from .conversation_protocol import Identity
+from bridge.transport.protocols.conversation import Identity
 
 class Phase(Enum):
     CLOSED='closed'

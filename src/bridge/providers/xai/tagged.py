@@ -3,9 +3,9 @@ import asyncio
 import base64
 import json
 import time
-from .diagnostics import event as log_event
-from .xai import XaiRealtimeBridge
-from .operation_errors import ProviderOperationError, already_absent
+from bridge.diagnostics.logging import event as log_event
+from bridge.providers.xai.realtime import XaiRealtimeBridge
+from bridge.providers.operation_errors import ProviderOperationError, already_absent
 
 class TaggedXai(XaiRealtimeBridge):
     def __init__(self, config, queue, valid):

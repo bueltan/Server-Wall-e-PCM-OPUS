@@ -2,7 +2,7 @@
 import asyncio
 import time
 from dataclasses import dataclass
-from .diagnostics import event
+from bridge.diagnostics.logging import event
 
 
 @dataclass

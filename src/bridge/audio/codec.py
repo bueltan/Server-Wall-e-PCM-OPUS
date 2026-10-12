@@ -1,6 +1,6 @@
 import ctypes
 import ctypes.util
-from .config import BridgeConfig
+from bridge.config import BridgeConfig
 
 
 class OpusError(RuntimeError):

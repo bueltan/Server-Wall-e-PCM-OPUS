@@ -5,8 +5,8 @@ from dataclasses import replace
 from pathlib import Path
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]/'src'))
 from bridge.config import BridgeConfig
-from bridge.protocol import PcmPacketFormat
-from bridge.ingress import InboundSession, ReorderBuffer, IngressStats
+from bridge.transport.protocols.audio import PcmPacketFormat
+from bridge.transport.ingress import InboundSession, ReorderBuffer, IngressStats
 
 class ReorderTests(unittest.TestCase):
     def setUp(self):

@@ -2,11 +2,11 @@
 import asyncio
 import secrets
 import struct
-from .session import ClientSession
-from .session_protocol import Identity,Packet,Kind,encode,decode
-from .tagged_xai import TaggedXai
-from .ingress import InboundSession
-from .diagnostics import event
+from bridge.legacy.session_v1 import ClientSession
+from bridge.transport.protocols.session_v2 import Identity,Packet,Kind,encode,decode
+from bridge.providers.xai.tagged import TaggedXai
+from bridge.transport.ingress import InboundSession
+from bridge.diagnostics.logging import event
 
 class ManagedSession(ClientSession):
     def __init__(self, config):

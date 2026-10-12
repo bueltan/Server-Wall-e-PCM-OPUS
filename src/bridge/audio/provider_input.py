@@ -4,7 +4,7 @@ from collections import deque
 from dataclasses import dataclass
 import math
 import time
-from .diagnostics import event
+from bridge.diagnostics.logging import event
 
 @dataclass
 class InputBufferStats:

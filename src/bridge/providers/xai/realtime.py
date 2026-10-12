@@ -3,7 +3,7 @@ import base64
 import json
 import os
 import websockets
-from .config import BridgeConfig
+from bridge.config import BridgeConfig
 
 
 class XaiRealtimeBridge:

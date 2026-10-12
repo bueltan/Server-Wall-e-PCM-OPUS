@@ -2,6 +2,9 @@
 
 ## 2026-10-12
 
+- Group backend modules by transport, conversation, audio, providers, diagnostics and legacy responsibilities.
+- Update imports and module documentation while preserving the main entrypoint and runtime behavior.
+
 - Decouple UDP recovery from provider history repair with bounded five-second PCM retention.
 - Pace provider catch-up, clear audio on close, and report retention/drop/age metrics.
 - Preserve startup backpressure and add offline retention/lifecycle regression tests.

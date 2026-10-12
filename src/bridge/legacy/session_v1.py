@@ -2,12 +2,12 @@ import asyncio
 from pathlib import Path
 from typing import Optional, Tuple
 from websockets.exceptions import ConnectionClosed
-from .config import BridgeConfig
-from .protocol import PcmPacketFormat, OpusPacketFormat
-from .codec import LibOpusEncoder
-from .recording import RollingWavRecorder
-from .xai import XaiRealtimeBridge
-from .ingress import InboundSession
+from bridge.config import BridgeConfig
+from bridge.transport.protocols.audio import PcmPacketFormat, OpusPacketFormat
+from bridge.audio.codec import LibOpusEncoder
+from bridge.audio.recording import RollingWavRecorder
+from bridge.providers.xai.realtime import XaiRealtimeBridge
+from bridge.transport.ingress import InboundSession
 
 
 class ClientSession:

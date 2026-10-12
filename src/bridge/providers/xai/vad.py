@@ -1,9 +1,9 @@
 """xAI VAD adapter: provider events, response decoding and history repair."""
 import asyncio
 import time
-from .tagged_xai import TaggedXai
-from .operation_errors import no_active_response
-from .diagnostics import event
+from bridge.providers.xai.tagged import TaggedXai
+from bridge.providers.operation_errors import no_active_response
+from bridge.diagnostics.logging import event
 
 class VadXai(TaggedXai):
     def __init__(self, config, queue, valid, events):

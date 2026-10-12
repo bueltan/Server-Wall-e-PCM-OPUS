@@ -3,8 +3,8 @@ from collections import OrderedDict, deque
 import math
 import struct
 import time
-from .conversation_protocol import Kind
-from .diagnostics import event
+from bridge.transport.protocols.conversation import Kind
+from bridge.diagnostics.logging import event
 
 class DownlinkRecovery:
     def __init__(self, config, send):

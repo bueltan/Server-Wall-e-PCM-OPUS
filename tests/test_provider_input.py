@@ -4,9 +4,9 @@ import time
 import unittest
 from dataclasses import replace
 from bridge.config import BridgeConfig
-from bridge.provider_input import ProviderInput
-from bridge.ingress import InboundSession
-from bridge.protocol import PcmPacketFormat
+from bridge.audio.provider_input import ProviderInput
+from bridge.transport.ingress import InboundSession
+from bridge.transport.protocols.audio import PcmPacketFormat
 
 class ProviderInputTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):

@@ -1,12 +1,12 @@
 """Per-client audio resources, recording, Opus encoding and downlink pacing."""
 import asyncio
 from pathlib import Path
-from .protocol import PcmPacketFormat, OpusPacketFormat
-from .codec import LibOpusEncoder
-from .recording import RollingWavRecorder
-from .conversation_protocol import Kind
-from .diagnostics import event
-from .pacing import AudioPacer
+from bridge.transport.protocols.audio import PcmPacketFormat, OpusPacketFormat
+from bridge.audio.codec import LibOpusEncoder
+from bridge.audio.recording import RollingWavRecorder
+from bridge.transport.protocols.conversation import Kind
+from bridge.diagnostics.logging import event
+from bridge.audio.pacing import AudioPacer
 
 class AudioPipeline:
     def __init__(self, config):

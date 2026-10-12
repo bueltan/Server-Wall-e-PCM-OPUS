@@ -3,12 +3,12 @@ import asyncio
 import unittest
 import random
 from dataclasses import replace
-from bridge.pacing import AudioPacer
-from bridge.audio_pipeline import AudioPipeline
+from bridge.audio.pacing import AudioPacer
+from bridge.audio.pipeline import AudioPipeline
 from bridge.config import BridgeConfig
-from bridge.conversation_protocol import Identity,Kind,Packet,Event
-from bridge.ingress import ReorderBuffer,IngressStats
-from bridge.reliable_events import ReliableEvents
+from bridge.transport.protocols.conversation import Identity,Kind,Packet,Event
+from bridge.transport.ingress import ReorderBuffer,IngressStats
+from bridge.transport.reliable_events import ReliableEvents
 
 class Clock:
     def __init__(self): self.t=0.0;self.oversleep=0.0

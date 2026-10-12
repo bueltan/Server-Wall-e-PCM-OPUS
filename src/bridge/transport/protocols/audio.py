@@ -1,5 +1,5 @@
 import struct
-from .config import BridgeConfig
+from bridge.config import BridgeConfig
 
 
 class BasePacketFormat:

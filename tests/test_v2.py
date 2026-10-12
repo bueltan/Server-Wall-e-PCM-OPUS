@@ -6,11 +6,11 @@ import unittest
 from dataclasses import replace
 from unittest.mock import patch
 from bridge.config import BridgeConfig
-from bridge.managed_session import ManagedSession
-from bridge.session_protocol import Identity, Packet, Kind, encode, decode
-from bridge.tagged_xai import TaggedXai
-from bridge.ingress import InboundSession
-from bridge.protocol import PcmPacketFormat
+from bridge.legacy.session_v2 import ManagedSession
+from bridge.transport.protocols.session_v2 import Identity, Packet, Kind, encode, decode
+from bridge.providers.xai.tagged import TaggedXai
+from bridge.transport.ingress import InboundSession
+from bridge.transport.protocols.audio import PcmPacketFormat
 
 class Transport:
     def __init__(self): self.sent=[]
@@ -179,7 +179,7 @@ class XaiTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(any(e['type']=='conversation.item.delete' and e.get('item_id')=='unheard' for e in self.x.ws.sent))
 
     async def test_scoped_error_keeps_receiver_alive_and_reports_full_operation(self):
-        from bridge.operation_errors import ProviderOperationError
+        from bridge.providers.operation_errors import ProviderOperationError
         original_send=self.x.ws.send
         async def reject(raw):
             payload=json.loads(raw)
@@ -210,7 +210,7 @@ class XaiTests(unittest.IsolatedAsyncioTestCase):
     async def test_missing_confirmation_closes_and_rejects_next_turn(self):
         async def ignore(raw): self.x.ws.sent.append(json.loads(raw))
         self.x.ws.send=ignore
-        with patch('bridge.tagged_xai.asyncio.wait_for',side_effect=TimeoutError):
+        with patch('bridge.providers.xai.tagged.asyncio.wait_for',side_effect=TimeoutError):
             self.assertFalse(await self.x.cancel_turn(self.token,0))
         self.assertFalse(self.x.connected_event.is_set());self.assertFalse(await self.x.commit_turn(self.token))
 

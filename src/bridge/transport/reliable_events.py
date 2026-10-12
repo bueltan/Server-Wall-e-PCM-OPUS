@@ -1,7 +1,7 @@
 """Ordered, bounded server controls; duplicates return the original playback ACK."""
 import asyncio
-from .conversation_protocol import Kind, Packet
-from .diagnostics import event
+from bridge.transport.protocols.conversation import Kind, Packet
+from bridge.diagnostics.logging import event
 
 class ReliableEvents:
     def __init__(self, send, failed):

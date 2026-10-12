@@ -4,17 +4,17 @@ import secrets
 import math
 import struct
 import time
-from .audio_pipeline import AudioPipeline
-from .downlink_recovery import DownlinkRecovery
-from .conversation import Conversation
-from .conversation_protocol import Identity, Packet, Kind, Event, encode, decode
-from .reliable_events import ReliableEvents
-from .vad_xai import VadXai
-from .ingress import InboundSession
-from .provider_input import ProviderInput
-from .diagnostics import event
-from .startup_audio import StartupAudio
-from .interruption import InterruptionCoordinator
+from bridge.audio.pipeline import AudioPipeline
+from bridge.transport.downlink_recovery import DownlinkRecovery
+from bridge.conversation.state import Conversation
+from bridge.transport.protocols.conversation import Identity, Packet, Kind, Event, encode, decode
+from bridge.transport.reliable_events import ReliableEvents
+from bridge.providers.xai.vad import VadXai
+from bridge.transport.ingress import InboundSession
+from bridge.audio.provider_input import ProviderInput
+from bridge.diagnostics.logging import event
+from bridge.audio.startup_audio import StartupAudio
+from bridge.conversation.interruption import InterruptionCoordinator
 
 class ContinuousSession(AudioPipeline):
     def __init__(self, config):

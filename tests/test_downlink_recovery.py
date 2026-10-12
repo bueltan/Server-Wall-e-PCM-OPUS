@@ -2,8 +2,8 @@ import struct
 import unittest
 from dataclasses import replace
 from bridge.config import BridgeConfig
-from bridge.conversation_protocol import Identity, Packet, Kind, encode, decode
-from bridge.downlink_recovery import DownlinkRecovery
+from bridge.transport.protocols.conversation import Identity, Packet, Kind, encode, decode
+from bridge.transport.downlink_recovery import DownlinkRecovery
 
 class RecoveryTests(unittest.TestCase):
     def setUp(self):

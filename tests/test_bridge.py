@@ -12,11 +12,11 @@ from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'src'))
 from bridge.config import BridgeConfig
-from bridge.protocol import PcmPacketFormat, OpusPacketFormat
-from bridge.recording import RollingWavRecorder
-from bridge.xai import XaiRealtimeBridge
-from bridge.udp import UdpAudioBridgeProtocol
-from bridge.session import ClientSession
+from bridge.transport.protocols.audio import PcmPacketFormat, OpusPacketFormat
+from bridge.audio.recording import RollingWavRecorder
+from bridge.providers.xai.realtime import XaiRealtimeBridge
+from bridge.transport.udp import UdpAudioBridgeProtocol
+from bridge.legacy.session_v1 import ClientSession
 
 class ProtocolTests(unittest.TestCase):
     def test_core_wire_contract_and_rollover_values(self):
@@ -68,7 +68,7 @@ class BridgeTests(unittest.IsolatedAsyncioTestCase):
         self.directory=tempfile.TemporaryDirectory()
         self.config=replace(BridgeConfig(),save_input_wav=False,save_output_wav=False,
             recordings_dir=self.directory.name,output_send_interval_sec=0,output_end_repeat_interval=0)
-        with patch('bridge.session.LibOpusEncoder',FakeEncoder): self.bridge=ClientSession(self.config)
+        with patch('bridge.legacy.session_v1.LibOpusEncoder',FakeEncoder): self.bridge=ClientSession(self.config)
         self.bridge.transport=FakeTransport();self.bridge.xai=FakeXai()
         self.addr=('127.0.0.1',12000)
 

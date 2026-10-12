@@ -146,7 +146,7 @@ Referencias oficiales:
 
 ## Pacing de salida y redes variables
 
-La salida Opus usa `AudioPacer` (`src/bridge/pacing.py`) con plazos absolutos del
+La salida Opus usa `AudioPacer` (`src/bridge/audio/pacing.py`) con plazos absolutos del
 reloj monotónico `asyncio.loop.time()`. Codificación y preparación UDP quedan
 incluidas en el intervalo nominal de 20 ms: no se añade una espera fija de 20 ms
 tras cada frame. Esto evita la deriva observada de unos 45 frames/s frente a los
@@ -349,3 +349,51 @@ not every retained frame. These counters are always enabled with existing backen
 event logging. Catch-up behavior and voice quality still require an integrated test.
 
 Deploy this change by restarting the backend only; no firmware upload is required.
+
+
+### Backend module layout
+
+```text
+src/
+├── main.py                         # Stable entrypoint and legacy class exports
+└── bridge/
+    ├── app.py                      # Logging, configuration and endpoint startup
+    ├── config.py                   # Shared settings
+    ├── transport/
+    │   ├── udp.py                  # Endpoint routing
+    │   ├── ingress.py              # Uplink admission, reordering and NACK
+    │   ├── downlink_recovery.py    # Opus resend cache and reliable audio END
+    │   ├── reliable_events.py      # Event delivery and ACK tracking
+    │   └── protocols/              # Audio, conversation v3 and session v2 formats
+    ├── conversation/
+    │   ├── session.py              # Current v3 coordinator
+    │   ├── state.py                # Conversation state and response identity
+    │   └── interruption.py         # Cancellation and history repair lifecycle
+    ├── audio/
+    │   ├── pipeline.py             # PCM/Opus output pipeline
+    │   ├── codec.py                # libopus binding
+    │   ├── pacing.py               # Audio transmission timing
+    │   ├── provider_input.py       # Bounded provider input retention and sending
+    │   ├── startup_audio.py        # Audio retained during provider startup
+    │   └── recording.py            # WAV recording
+    ├── providers/
+    │   ├── operation_errors.py     # Provider operation error classification
+    │   └── xai/
+    │       ├── realtime.py         # WebSocket connection and basic API events
+    │       ├── tagged.py           # Response identity and history operations
+    │       └── vad.py              # Continuous VAD and history repair barrier
+    ├── diagnostics/logging.py      # Structured events and logging setup
+    └── legacy/                    # Reference v1/v2 coordinators and their tests
+```
+
+The current path is `app → transport.udp → conversation.session`; the coordinator
+connects transport, audio and provider components. Protocol contracts contain no
+provider logic. Package initializers are deliberately lightweight: import classes
+from their defining modules, without starting connections or tasks on import.
+
+`python src/main.py` and the public class exports from `main` remain available.
+Internal `bridge.*` import paths have moved to the locations above; update custom
+scripts that import them directly. No old-path shim modules are retained.
+This reorganization changes no wire formats, timing, buffer limits or provider
+behavior, and does not yet add a generic multi-provider interface. Existing offline
+tests retain their names and now import the modules by responsibility.

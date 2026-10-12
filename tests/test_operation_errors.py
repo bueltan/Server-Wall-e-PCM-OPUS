@@ -1,5 +1,5 @@
 import unittest
-from bridge.operation_errors import already_absent, no_active_response
+from bridge.providers.operation_errors import already_absent, no_active_response
 
 class OperationErrorTests(unittest.TestCase):
     def test_generic_rejections_never_mean_success(self):

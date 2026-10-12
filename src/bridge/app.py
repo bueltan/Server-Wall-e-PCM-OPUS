@@ -1,7 +1,7 @@
 import asyncio
-from .config import BridgeConfig
-from .diagnostics import configure_logging, event
-from .udp import UdpAudioBridgeProtocol
+from bridge.config import BridgeConfig
+from bridge.diagnostics.logging import configure_logging, event
+from bridge.transport.udp import UdpAudioBridgeProtocol
 
 
 async def async_main() -> None:
