@@ -144,3 +144,33 @@ class InboundTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(s.queue.qsize(),0);self.assertEqual(self.events,[('audio',0),('commit',)])
 
 if __name__=='__main__': unittest.main()
+
+class RecoveryTests(unittest.IsolatedAsyncioTestCase):
+    async def test_full_lookahead_still_accepts_missing_head(self):
+        stats=IngressStats(); b=ReorderBuffer(.04,2,stats)
+        b.push({'seq':1},0); b.push({'seq':2},0)
+        self.assertTrue(b.push({'seq':0},.03))
+        self.assertEqual([p['seq'] for p in b.drain(.03)],[0,1,2])
+        self.assertEqual(stats.dropped_full,0)
+
+    async def test_busy_queue_does_not_delay_real_nack_or_request_queued_audio(self):
+        config=replace(BridgeConfig(),input_queue_frames=4)
+        fmt=PcmPacketFormat(config); requests=[]; audio=[]
+        async def send(p): audio.append(p['seq'])
+        async def end(p): pass
+        async def commit(): return True
+        session=InboundSession(fmt,config,send,end,commit,
+            nack_sink=lambda base,mask: requests.append((base,mask)))
+        # Frame zero is genuinely absent; frame one is queued and must not be requested.
+        for seq in (2,1,3,4):
+            session.admit(fmt.pack_audio_packet(seq,seq*320,320,bytes(640)))
+        kind,packet=session._take(session.queue.get_nowait())
+        await session._consume(kind,packet)
+        self.assertEqual(requests,[(0,1)])
+        session.admit(fmt.pack_audio_packet(0,0,320,bytes(640)))
+        while not session.queue.empty():
+            kind,packet=session._take(session.queue.get_nowait())
+            await session._consume(kind,packet)
+        self.assertEqual(audio,list(range(5)))
+        self.assertEqual(session.stats.nack_recovered,1)
+        self.assertEqual(requests,[(0,1)])

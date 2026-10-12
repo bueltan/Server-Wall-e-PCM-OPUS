@@ -50,7 +50,8 @@ class BridgeConfig:
     # Bounded per-client uplink. Audio drops never consume END/COMMIT slots.
     input_queue_frames: int = 16
     input_reorder_window_sec: float = 0.04
-    input_recovery_window_sec: float = 0.12
+    input_recovery_window_sec: float = 0.40
+    input_reorder_frames: int = 32  # separate from WS admission; 640 ms of PCM
     input_silence_max_ms: int = 200
     input_send_timeout_sec: float = 1.0
 

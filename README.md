@@ -171,20 +171,31 @@ aumentarlos no corrige deriva de envío y añade latencia. El heartbeat y el fin
 explícito por END permanecen separados del pacing; perder END puede terminar en
 cancelación por stall en CORE, no en una falsa reproducción completa.
 
-La recuperación uplink sigue acotada: caché CORE 12 frames / TTL 240 ms,
-reordenamiento backend 40 ms y espera de recuperación 120 ms. Un presupuesto
-simplificado, con pérdida seguida del siguiente frame a los 20 ms, muestra:
+La recuperación uplink usa una caché en CORE reservada una sola vez al iniciar de 32 frames (640 ms de
+PCM, TTL 640 ms desde la captura), reordenamiento normal de 40 ms y una espera
+máxima de recuperación de 400 ms desde la solicitud NACK. Los valores se ajustan
+en `SessionClient::CACHE_FRAMES/CACHE_TTL_MS` y `BridgeConfig`. Cada frame admite
+un único intento de retransmisión; esto no cubre interrupciones de varios segundos.
+La caché aumenta unos 13,1 KiB respecto de los 12 frames anteriores y también
+retiene audio mientras llega START_ACK. Una caché circular puede sobrescribir un
+frame antes del TTL si ingresan ráfagas de audio.
 
-| Ida / vuelta de la red (hipótesis) | Edad al llegar NACK a CORE | Caché disponible | Retransmisión dentro de 120 ms |
-|---|---:|---|---|
-| 20 / 20 ms | 100 ms | Sí | Sí |
-| 80 / 80 ms | 220 ms | Al límite | No |
-| 140 / 145 ms | 345 ms | No | No |
+El backend separa los 32 frames de reordenamiento (`input_reorder_frames`) de los
+16 de admisión al envío xAI. Reserva una posición adicional para el frame que
+falta al principio del hueco. Solicita frames ausentes aunque haya audio en cola,
+excluyendo los ya recibidos o encolados. La espera adicional afecta solo a huecos;
+el PCM contiguo se envía de inmediato. Sin recuperación sigue insertando hasta
+200 ms de silencio por hueco y descarta audio ante saturación de la cola xAI.
 
-Es un análisis de límites, no una medición de RTT del VPS. No cambia caché ni
-esperas de producción. Para ampliarlas hay que medir CORE↔VPS y equilibrar RAM,
-latencia y obsolescencia del audio; sin recuperación se conserva silencio limitado.
-Un ping corto a Google desde una PC no determina pérdida UDP de CORE al VPS.
+Para evaluar hardware: `V3_STATS` incluye `retx` (envíos exitosos), `retx_fail`,
+`cache_miss`, `cache_expired` (subconjunto de misses) y `nack_age_max_ms` (máximo
+para frames encontrados en caché, incluidos vencidos). `INPUT_STATS.nack_recovered`
+cuenta frames solicitados que llegaron a tiempo al reordenador; puede incluir un
+original retrasado y no demuestra por sí solo que la copia retransmitida llegó.
+Los contadores de CORE son acumulados desde el arranque; los del backend pertenecen
+a la entrada de la conversación. Comparar deltas, `missing` y `silence_frames`.
+La prueba cruzada offline usa el cliente C++ real y el trabajador Python con
+300 ms de RTT simulado; aún se requiere validar RAM y recuperación en hardware.
 
 Las pruebas offline incluyen 30 s de pacing con procesamiento simulado de 2 ms,
 Opus real con reloj simulado, pausas y atrasos del scheduler, cancelación durante

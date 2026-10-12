@@ -1,5 +1,6 @@
 """One bounded, ordered input worker per client session. No network dependencies."""
 import asyncio
+from collections import Counter
 from .diagnostics import event
 from dataclasses import dataclass
 from typing import Awaitable, Callable
@@ -16,6 +17,7 @@ class IngressStats:
     invalid: int = 0
     duplicate_controls: int = 0
     nack_frames: int = 0
+    nack_recovered: int = 0
     silence_frames: int = 0
     cache_misses: int = 0
 
@@ -26,18 +28,20 @@ class ReorderBuffer:
         self.pending = {}
         self.deadline = None
 
-    def push(self, packet: dict, now: float) -> None:
+    def push(self, packet: dict, now: float) -> bool:
         seq = packet['seq']
         distance = (seq - self.expected) & MASK
         if distance >= 0x80000000 or seq in self.pending:
             self.stats.duplicates_late += 1
-            return
-        if len(self.pending) >= self.capacity:
+            return False
+        if len(self.pending) >= self.capacity and seq != self.expected:
             self.stats.dropped_full += 1
-            return
+            return False
+        # One reserved slot admits the missing head even when lookahead is full.
         self.pending[seq] = packet
         if seq != self.expected and self.deadline is None:
             self.deadline = now + self.window
+        return True
 
     def drain(self, now: float, force: bool = False) -> list:
         ready = []
@@ -70,7 +74,7 @@ class InboundSession:
     """
     def __init__(self, packet_format, config, audio_sink: Callable[[dict], Awaitable[bool]],
                  end_sink: Callable[[dict], Awaitable[None]], commit_sink: Callable[[], Awaitable[bool]], nack_sink=None, silence_sink=None, before_audio=None):
-        if config.input_queue_frames < 1 or config.input_reorder_window_sec < 0 or config.input_send_timeout_sec <= 0:
+        if config.input_queue_frames < 1 or config.input_reorder_frames < 1 or config.input_recovery_window_sec < 0 or config.input_reorder_window_sec < 0 or config.input_send_timeout_sec <= 0:
             raise ValueError('Invalid ingress queue/window/timeout settings')
         self.format, self.config = packet_format, config
         self.audio_sink, self.end_sink, self.commit_sink = audio_sink, end_sink, commit_sink
@@ -79,6 +83,7 @@ class InboundSession:
         self.nack_sink = nack_sink
         self.silence_sink = silence_sink
         self.requested = set()
+        self.queued_sequences = Counter()
         self.queue = asyncio.Queue(maxsize=config.input_queue_frames + 2)
         self.audio_queued = 0
         self.end_admitted = False
@@ -86,7 +91,7 @@ class InboundSession:
         self.finished = False
         self.sealing = False
         self.closing_deadline = None
-        self.reorder = ReorderBuffer(config.input_reorder_window_sec, config.input_queue_frames, self.stats)
+        self.reorder = ReorderBuffer(config.input_reorder_window_sec, config.input_reorder_frames, self.stats)
         self.task = None
         self.end_packet = None
 
@@ -137,12 +142,13 @@ class InboundSession:
             self.finished = False
             self.end_admitted = self.commit_admitted = False
             self.end_packet = None
-            self.reorder = ReorderBuffer(self.config.input_reorder_window_sec, self.config.input_queue_frames, self.stats)
+            self.reorder = ReorderBuffer(self.config.input_reorder_window_sec, self.config.input_reorder_frames, self.stats)
         if self.audio_queued >= self.config.input_queue_frames:
             self.stats.dropped_full += 1
             return False
         self.queue.put_nowait(('audio', packet))
         self.audio_queued += 1
+        self.queued_sequences[packet['seq']] += 1
         self.stats.accepted += 1
         return True
 
@@ -157,6 +163,10 @@ class InboundSession:
     def _take(self, item):
         if item[0] == 'audio':
             self.audio_queued -= 1
+            seq = item[1]['seq']
+            self.queued_sequences[seq] -= 1
+            if not self.queued_sequences[seq]:
+                del self.queued_sequences[seq]
         return item
 
     async def _send(self, callback, *args):
@@ -174,7 +184,7 @@ class InboundSession:
             event('INPUT_SEND_FAILED',getattr(self,'log_identity',None),error=type(exc).__name__)
 
     def _request_gaps(self):
-        if self.nack_sink is None or self.audio_queued >= max(1, self.config.input_queue_frames // 2):
+        if self.nack_sink is None:
             return
         expected = self.reorder.expected
         self.requested = {s for s in self.requested if ((s-expected) & MASK) < 8}
@@ -187,7 +197,9 @@ class InboundSession:
             return
         limit = min(8, min(distances))
         mask = sum(1 << i for i in range(limit)
-                   if ((expected+i) & MASK) not in self.requested)
+                   if ((expected+i) & MASK) not in self.requested
+                   and ((expected+i) & MASK) not in self.queued_sequences
+                   and ((expected+i) & MASK) not in self.reorder.pending)
         if not mask:
             return
         self.nack_sink(expected, mask)
@@ -226,7 +238,11 @@ class InboundSession:
                 return
             # Drain expired frames before admitting another to bound pending storage.
             await self._emit()
-            self.reorder.push(packet, now)
+            recovered = packet['seq'] in self.requested
+            admitted = self.reorder.push(packet, now)
+            if recovered and admitted:
+                self.stats.nack_recovered += 1
+                self.requested.discard(packet['seq'])
             self._request_gaps()
             await self._emit()
         elif kind == 'end':
