@@ -289,9 +289,13 @@ class ContinuousSession(AudioPipeline):
             # Drain without flooding the normal 16-frame ingress queue. New PCM
             # remains in startup until the transfer completes, preserving order.
             while self.startup.pending and self.conversation.identity==token:
-                if self.input.audio_queued>=self.config.input_queue_frames:
+                if self.input.buffered_audio_frames>=self.config.input_queue_frames:
                     await asyncio.sleep(.001); continue
                 self.input.admit(self.startup.pending.popleft())
+            event('STARTUP_TRANSFER_COMPLETE', token,
+                  buffered_frames=self.input.buffered_audio_frames,
+                  dropped_full=self.input.stats.dropped_full,
+                  startup_dropped=self.startup.dropped)
             self.input_live=True
             await receiver
         except asyncio.CancelledError: raise

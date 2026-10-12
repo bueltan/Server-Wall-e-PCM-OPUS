@@ -208,6 +208,35 @@ class SessionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(appends,[bytes(640),bytes([1])*640])
         self.assertTrue(self.s.input_live)
 
+    async def test_startup_transfer_waits_for_reorder_capacity_on_sequence_gap(self):
+        self.deliver(Kind.CANCEL,self.i,3,bytes(4));await settle()
+        gate=asyncio.Event();original=self.s.xai.connect
+        async def delayed(): await gate.wait();await original()
+        self.s.xai.connect=delayed
+        self.i=Identity(self.i.client,self.i.server,2,0)
+        self.deliver(Kind.START,self.i,4);await settle()
+        self.provider.calls.clear()
+        # Enough backlog to overflow the 16-frame reorder buffer if startup
+        # only checks queue depth. Frame 1 is deliberately unavailable.
+        sequences=[0]+list(range(2,81))
+        for seq in sequences:
+            pcm=struct.pack('<h',seq)*320
+            self.deliver(Kind.PCM,self.i,seq,self.s.pcm_packet_format.pack_audio_packet(seq,seq*320,320,pcm))
+        gate.set();await self.ack_events()
+        async def drained():
+            while not self.s.input_live or len([p for p in self.provider.calls
+                    if p['type']=='input_audio_buffer.append'])<len(sequences)+1:
+                await asyncio.sleep(.001)
+        await asyncio.wait_for(drained(),2)
+        self.assertEqual(self.s.input.stats.dropped_full,0)
+        self.assertEqual(self.s.input.stats.missing,1)
+        self.assertEqual(self.s.input.stats.silence_frames,1)
+        appends=[base64.b64decode(p['audio']) for p in self.provider.calls
+                 if p['type']=='input_audio_buffer.append']
+        self.assertEqual(appends,[bytes(640),bytes(640)]+[struct.pack('<h',n)*320 for n in range(2,81)])
+        self.assertEqual(self.s.conversation.identity,self.i)
+        self.assertFalse(self.s.startup.pending)
+
     async def test_connect_failure_does_not_reconnect_in_background(self):
         self.deliver(Kind.CANCEL,self.i,3,bytes(4));await settle()
         attempts=[]

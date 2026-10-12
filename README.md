@@ -219,3 +219,15 @@ evaluarse con respuestas reales. No hay retransmisión de Opus.
 
 Las grabaciones WAV opcionales representan audio aceptado/procesado por el
 bridge; incluyen silencio insertado en uplink. No miden lo escuchado físicamente.
+
+## Startup audio backpressure
+
+The startup transfer counts both queued PCM and frames held for reordering before
+admitting more audio to the normal 16-frame pipeline. A missing sequence must not
+cause the retained startup audio to flood the reorder buffer. The existing recovery
+and silence deadlines still apply. `STARTUP_TRANSFER_COMPLETE` reports remaining
+buffered frames, normal pipeline drops and startup drops separately.
+
+Audio still uses 20 ms frames and individual provider appends. Provider batching
+(e.g. 80 ms) is a separate possible optimization; it does not define a minimum
+speech duration or change server VAD endpointing/interruption policy.

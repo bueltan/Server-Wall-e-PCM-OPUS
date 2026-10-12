@@ -90,6 +90,12 @@ class InboundSession:
         self.task = None
         self.end_packet = None
 
+    @property
+    def buffered_audio_frames(self):
+        # Startup backpressure must include frames held behind a sequence gap,
+        # not just the queue waiting for the worker.
+        return self.audio_queued + len(self.reorder.pending)
+
     def start(self):
         if self.task is None:
             self.task = asyncio.create_task(self.run(), name='client-input')
