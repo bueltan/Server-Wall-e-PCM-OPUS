@@ -2,6 +2,10 @@
 
 ## 2026-10-12
 
+- Decouple UDP recovery from provider history repair with bounded five-second PCM retention.
+- Pace provider catch-up, clear audio on close, and report retention/drop/age metrics.
+- Preserve startup backpressure and add offline retention/lifecycle regression tests.
+
 - Add bounded Opus resend caching, per-response downlink NACK and recovery metrics.
 - Retry audio END until receipt ACK; fail explicitly on unconfirmed termination.
 - Advertise the downlink capability and invalidate recovery on cancellation/reset.

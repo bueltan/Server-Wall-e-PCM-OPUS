@@ -66,7 +66,7 @@ class ModelTests(unittest.TestCase):
 class SessionTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
         cfg=replace(BridgeConfig(),save_input_wav=False,save_output_wav=False,
-                    output_send_interval_sec=0,output_end_repeat_interval=0)
+                    output_send_interval_sec=0,output_end_repeat_interval=0,provider_input_send_interval_sec=0)
         self.s=ContinuousSession(cfg);self.s.transport=Transport()
         self.peer=('127.0.0.1',1234)
         self.provider=Provider(self.s.xai);self.s.xai.ws=self.provider
@@ -547,7 +547,7 @@ class SessionTests(unittest.IsolatedAsyncioTestCase):
     async def test_missing_core_event_ack_closes_provider_without_self_cancellation(self):
         await self.response()  # response start event deliberately unacknowledged
         async def closed():
-            while not self.provider.closed: await asyncio.sleep(.01)
+            while not self.provider.closed or self.s.closing: await asyncio.sleep(.01)
         await asyncio.wait_for(closed(),2)
         self.assertFalse(self.s.closing)
         self.assertIsNone(self.s.conversation.identity)

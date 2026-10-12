@@ -11,6 +11,7 @@ from .conversation_protocol import Identity, Packet, Kind, Event, encode, decode
 from .reliable_events import ReliableEvents
 from .vad_xai import VadXai
 from .ingress import InboundSession
+from .provider_input import ProviderInput
 from .diagnostics import event
 from .startup_audio import StartupAudio
 from .interruption import InterruptionCoordinator
@@ -46,8 +47,9 @@ class ContinuousSession(AudioPipeline):
         self.downlink = DownlinkRecovery(config,self._send)
 
     def new_input(self):
-        worker = InboundSession(self.pcm_packet_format, self.config, self._accept_audio,
-            self.ignore_end, self.no_commit, nack_sink=self.nack, silence_sink=self._accept_audio, before_audio=self.xai.wait_input_ready)
+        self.provider_input=ProviderInput(self.config,self._accept_audio,self.xai.wait_input_ready)
+        worker = InboundSession(self.pcm_packet_format, self.config, self.provider_input.admit,
+            self.ignore_end, self.no_commit, nack_sink=self.nack, silence_sink=self.provider_input.admit)
         worker.log_identity = self.conversation.identity
         return worker
 
@@ -125,7 +127,7 @@ class ContinuousSession(AudioPipeline):
             self.pending.add(key)
             # Stop old PCM/output at admission, not after waiting for xAI operations.
             if p.kind == Kind.CANCEL and current and p.identity.turn == current.turn:
-                self.conversation.close(); self.input.close(); self.reset_output()
+                self.conversation.close(); self.input.close(); self.provider_input.close(); self.reset_output()
             self.controls.put_nowait(p); return
         if current is None or p.identity.client != current.client or p.identity.turn != current.turn:
             self.counters['stale'] += 1; return
@@ -253,7 +255,7 @@ class ContinuousSession(AudioPipeline):
 
     async def close_remote(self, token, played):
         self.closing=True
-        self.conversation.close(); self.input.close(); self.input_live=False
+        self.conversation.close(); self.input.close(); self.provider_input.close(); self.input_live=False
         self.startup.clear(); self.events.reset()
         await self.interruptions.close()
         for task in list(self.repairs):
@@ -261,6 +263,7 @@ class ContinuousSession(AudioPipeline):
         if self.input.task:
             try: await self.input.task
             except asyncio.CancelledError: pass
+        await self.provider_input.wait_closed()
         self.input_recorder.close(); self.inbound_started=False; self.reset_output()
         # Closing the WebSocket releases this conversation and its history.
         await self.stop_provider()
@@ -298,11 +301,13 @@ class ContinuousSession(AudioPipeline):
             if self.conversation.identity!=token: return
             event('PROVIDER_READY',token,startup_frames=len(self.startup.pending),startup_dropped=self.startup.dropped)
             await self.notify(Event.READY)
+            self.provider_input.start(token)
             self.input.start()
             # Drain without flooding the normal 16-frame ingress queue. New PCM
             # remains in startup until the transfer completes, preserving order.
             while self.startup.pending and self.conversation.identity==token:
-                if self.input.buffered_audio_frames>=self.config.input_queue_frames:
+                if (self.input.buffered_audio_frames>=self.config.input_queue_frames or
+                    self.input.buffered_audio_frames+len(self.provider_input.pending)>=self.provider_input.capacity):
                     await asyncio.sleep(.001); continue
                 self.input.admit(self.startup.pending.popleft())
             event('STARTUP_TRANSFER_COMPLETE', token,
@@ -343,6 +348,7 @@ class ContinuousSession(AudioPipeline):
                 input_queue=self.input.queue.qsize(),output_queue=self.output_pcm_queue.qsize(),startup_frames=len(self.startup.pending),startup_dropped=self.startup.dropped,
                 **self.counters)
             event('INPUT_STATS',self.conversation.identity,**vars(self.input.stats))
+            event('PROVIDER_INPUT_STATS',self.conversation.identity,**self.provider_input.snapshot())
             if self.conversation.response:
                 event('OUTPUT_PACING_STATS',self.conversation.response,**self.output_pacer.stats())
                 event('OUTPUT_RECOVERY_STATS',self.conversation.response,**self.downlink.stats)
@@ -355,7 +361,7 @@ class ContinuousSession(AudioPipeline):
             await self.fail('peer_timeout')
 
     def connection_lost(self, exc):
-        self.conversation.close(); self.input.close(); self.events.close(); self.downlink.reset()
+        self.conversation.close(); self.input.close(); self.provider_input.close(); self.events.close(); self.downlink.reset()
         if self.provider_task: self.provider_task.cancel()
         for task in self.tasks: task.cancel()
         for task in self.repairs: task.cancel()

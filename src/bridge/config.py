@@ -55,6 +55,11 @@ class BridgeConfig:
     input_silence_max_ms: int = 200
     input_send_timeout_sec: float = 1.0
 
+    # Ordered PCM retained while history repair blocks the provider, not UDP.
+    provider_input_buffer_sec: float = 5.0
+    provider_input_max_age_sec: float = 5.0
+    provider_input_send_interval_sec: float = .01  # at most 2x real time to catch up
+
     # Independent deadlines: CORE liveness and provider history transactions.
     core_disconnect_timeout_sec: float = 10.0
     history_repair_timeout_sec: float = 4.0

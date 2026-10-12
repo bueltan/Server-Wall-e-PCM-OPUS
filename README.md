@@ -311,3 +311,41 @@ Offline tests cover bounded retransmission, cache age/eviction, stale identities
 loss/retry of END and its ACK, cancellation, tail grace and real Opus pipeline
 integration. Hardware validation still needs packet loss/reordering tests and
 confirmation that playback completes when the first END or ACK is lost.
+
+
+### Provider input retention during history repair
+
+Continuous VAD input now has an independent ordered PCM sender. UDP admission,
+reordering, uplink NACK and bounded silence insertion continue while the provider
+adapter pauses appends to repair interrupted assistant history. A valid interruption
+preserves retained user audio; closing or replacing the conversation cancels the
+sender and clears its pending frames before another conversation starts.
+
+`BridgeConfig` controls the bounds:
+
+- `provider_input_buffer_sec = 5.0`: 250 pending 20 ms PCM frames at 16 kHz mono
+  signed 16-bit, up to 160,000 payload bytes on the **backend**, plus Python metadata
+  and one in-flight frame. CORE RAM and jitter settings are unchanged.
+- `provider_input_max_age_sec = 5.0`: expire pending frames after five seconds from
+  admission to this queue, using a monotonic clock. Expiry is checked on admission
+  and after the provider repair barrier, before sending.
+- `provider_input_send_interval_sec = 0.01`: space appends by at least 10 ms after
+  each send completes, allowing catch-up at no more than twice real time. Normal
+  20 ms arrivals are sent immediately when the provider is available; there is no
+  requirement to accumulate five seconds and no unlimited catch-up burst.
+
+When capacity is exhausted, discard new frames and retain the existing ordered
+prefix. Expired or rejected frames are counted explicitly; no extra silence is
+inserted for these policy drops. This queue does not change the 200 ms uplink gap
+silence cap or the four-second history repair deadline. Startup transfer respects
+both ingress and provider queue capacity instead of flooding them.
+
+`PROVIDER_INPUT_STATS` (periodic) and `PROVIDER_INPUT_CLOSED` (final) report queued
+frames/ms, oldest age, peak occupancy, sent frames, capacity drops, expiry, cleared
+frames, send failures and maximum send age. `INPUT_STATS` still describes UDP ingress
+and recovery; a transport-recovered packet can separately expire before provider
+sending. Input WAV recordings contain audio actually handed to the provider sender,
+not every retained frame. These counters are always enabled with existing backend
+event logging. Catch-up behavior and voice quality still require an integrated test.
+
+Deploy this change by restarting the backend only; no firmware upload is required.
