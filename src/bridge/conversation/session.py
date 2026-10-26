@@ -164,6 +164,10 @@ class ContinuousSession(AudioPipeline):
     def provider_event(self, kind, message):
         if self.conversation.identity is None: return None
         self.last_activity = time.monotonic()
+        if kind == 'expression.plan':
+            if self.output_valid(message['identity']):
+                self.expressions.prepare(message['identity'], message['plan'])
+            return
         if kind == 'input_audio_buffer.speech_started':
             previous = self.conversation.speech_started()
             self.reset_output()

@@ -184,7 +184,8 @@ class TaggedXai(XaiRealtimeBridge):
                           status=event.get('response',{}).get('status'),valid=self.valid(token),
                           billable_audio_seconds=event.get('response',{}).get('usage',{}).get('billable_audio_seconds'))
                 self.generation_done.set()
-                if self.valid(token) and token not in self.output_done:
+                if (self.valid(token) and token not in self.output_done
+                        and not getattr(self, '_suppress_tool_end', False)):
                     self.output_done.add(token);self.output_pcm_queue.put_nowait((token,None))
         elif kind=='error':
             error=event.get('error',{})

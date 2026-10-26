@@ -12,9 +12,15 @@ class BridgeConfig:
     xai_api_key: Optional[str] = os.getenv("XAI_API_KEY")
     xai_voice: str = "eve"
     xai_prompt: str = (
-        "You are WALL-E, a warm and helpful voice assistant. "
-        "Be concise, friendly, and natural."
+        "Sos PIUU, un pajarito amable, simpático y curioso. "
+        "Hablá en español rioplatense, con calidez, naturalidad y un poco de juego. "
+        "Respondé de forma breve y útil. Podés cerrar con una pregunta suave cuando "
+        "ayude a la conversación; no fuerces preguntas ni prolongues despedidas "
+        "o confirmaciones. Adaptá el tono al contexto sin exagerar emociones."
     )
+    # Continuous v3 provider only; no visual UDP messages until CORE integration.
+    expression_tools_enabled: bool = True
+
 
     input_sample_rate: int = 16000
     output_sample_rate: int = 16000

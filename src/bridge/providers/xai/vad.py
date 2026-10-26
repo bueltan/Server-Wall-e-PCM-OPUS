@@ -2,6 +2,8 @@
 import asyncio
 import time
 from bridge.providers.xai.tagged import TaggedXai
+from bridge.providers.xai.expression_tools import ExpressionTools
+from bridge.expressions.plan import tool_schema
 from bridge.providers.operation_errors import no_active_response
 from bridge.diagnostics.logging import event
 
@@ -9,6 +11,8 @@ class VadXai(TaggedXai):
     def __init__(self, config, queue, valid, events):
         super().__init__(config, queue, valid)
         self.events = events
+        self.expression_control = ExpressionTools(self)
+        self._suppress_tool_end = False
         self.history_ready = asyncio.Event(); self.history_ready.set()
         self.done = {}
         self.provider_done = {}
@@ -19,10 +23,14 @@ class VadXai(TaggedXai):
         self.repaired_responses = {}
         self.cancel_operations = {}
 
+    def expression_tools(self):
+        return [tool_schema()] if self.config.expression_tools_enabled else []
+
     def turn_detection(self):
         return {'type': 'server_vad'}
 
     async def connect(self):
+        self.expression_control.reset()
         self.done.clear(); self.response_ids.clear(); self.provider_done.clear()
         self.cancel_operations.clear()
         self.repaired_responses.clear(); self.history_changed.clear()
@@ -73,6 +81,15 @@ class VadXai(TaggedXai):
 
     async def handle_event(self, message):
         kind = message.get('type')
+        if kind == 'response.function_call_arguments.done':
+            if self.config.expression_tools_enabled: self.expression_control.collect(message)
+            return
+        if kind == 'input_audio_buffer.speech_started':
+            self.expression_control.plans.clear()
+            self.expression_control.calls.clear()
+        if kind == 'response.output_item.added':
+            self.expression_control.observe_item(message)
+
         response_id=message.get('response_id')
         retired=self.repaired_responses.get(response_id)
         if retired is not None and kind in ('response.output_item.added','response.output_audio.delta'):
@@ -86,7 +103,15 @@ class VadXai(TaggedXai):
             response_id=message.get('response',{}).get('id')
             self.latest_response_id=response_id
             self.provider_done[response_id]=asyncio.Event()
-            token = self.events(kind, message)
+            continuation = self.expression_control.continuation
+            self.expression_control.continuation = None
+            if continuation is not None:
+                if not self.valid(continuation) or not self.history_ready.is_set():
+                    # Ambiguous response after interruption: never attach stale plans to a new turn.
+                    raise RuntimeError('stale_tool_continuation')
+                token = continuation
+            else:
+                token = self.events(kind, message)
             self.pending = token
             self.response_requested_at = time.monotonic()
             if token:
@@ -100,7 +125,22 @@ class VadXai(TaggedXai):
             for item in message.get('response', {}).get('output', []):
                 await super().handle_event({'type': 'response.output_item.added',
                     'response_id': self.response_ids[token], 'item': item})
-        await super().handle_event(message)
+        if (self.config.expression_tools_enabled and kind == 'response.output_audio.done'
+                and not self.audio_totals.get(token, [0, 0])[0]):
+            return  # Tool-only turns must not produce an empty audio END before continuation.
+        tool_rid, calls = (None, {})
+        if kind == 'response.done' and self.config.expression_tools_enabled:
+            tool_rid, calls = self.expression_control.terminal_calls(message)
+        had_audio = bool(token and self.audio_totals.get(token, [0, 0])[0])
+        if kind == 'response.output_audio.delta' and token is not None and self.valid(token):
+            plan = self.expression_control.take_plan(token)
+            if plan is not None:
+                self.events('expression.plan', {'identity': token, 'plan': plan})
+        self._suppress_tool_end = bool(calls and not had_audio)
+        try:
+            await super().handle_event(message)
+        finally:
+            self._suppress_tool_end = False
         if kind in ("response.output_item.added", "response.output_audio.delta", "response.done", "error"):
             self.history_changed.set()
         if kind == 'response.done':
@@ -113,11 +153,16 @@ class VadXai(TaggedXai):
                 if old!=self.latest_response_id and self.provider_done[old].is_set():
                     self.provider_done.pop(old,None)
 
+        if kind == 'response.done' and calls:
+            await self.expression_control.finish(tool_rid, token,
+                message.get('response', {}).get('status'), had_audio)
+
     async def _repair_history(self, token, played_ms, manual=False, phase=None,
                               cancel_if_missing=True):
         """Preserve the new user audio. Never clear it on a VAD interruption."""
         if token is None: return
         self.cancel_identity = token
+        self.expression_control.discard(token)
         if manual: await self.cancel_response(token)
         # A concrete item can be repaired without depending on response.done.
         # If interrupted immediately after response.created, wait for either an
@@ -187,6 +232,7 @@ class VadXai(TaggedXai):
         event('HISTORY_REPAIRED', token, played_ms=played_ms, manual=manual)
 
     async def close(self):
+        self.expression_control.reset()
         # Bound shutdown even when the peer stops answering the close handshake.
         self._clear_operations();self.cancel_operations.clear()
         self.ready_event.clear();self.connected_event.clear()

@@ -7,10 +7,12 @@ from bridge.audio.recording import RollingWavRecorder
 from bridge.transport.protocols.conversation import Kind
 from bridge.diagnostics.logging import event
 from bridge.audio.pacing import AudioPacer
+from bridge.expressions.timeline import ExpressionTimeline
 
 class AudioPipeline:
     def __init__(self, config):
         self.config = config
+        self.expressions = ExpressionTimeline()
         self.pcm_packet_format = PcmPacketFormat(config)
         self.opus_packet_format = OpusPacketFormat(config)
         self.opus_encoder = LibOpusEncoder(config)
@@ -30,6 +32,7 @@ class AudioPipeline:
         return AudioPacer(self.config.output_send_interval_sec,self.config.output_pacing_max_lag_sec)
 
     def reset_output(self):
+        self.expressions.reset('output_reset')
         if hasattr(self,'downlink'): self.downlink.reset()
         self.output_pacer=self.new_pacer()
         self.output_sequence = self.output_pts_samples = 0
@@ -70,6 +73,7 @@ class AudioPipeline:
                         if i+1<self.config.output_end_repeat_count: await asyncio.sleep(self.config.output_end_repeat_interval)
                 if not self.output_valid(token): continue
                 self.output_active=False;self.output_finished=True;self.output_recorder.close()
+                self.expressions.reset('audio_send_finished')
                 event("OUTPUT_END",token,final_seq=self.output_sequence,pts=self.output_pts_samples)
                 event("OUTPUT_PACING",token,**self.output_pacer.stats())
 
@@ -98,6 +102,7 @@ class AudioPipeline:
             if hasattr(self,'downlink'):
                 self.downlink.remember(token,self.output_sequence,inner)
             self._send(Kind.OPUS,token,self.output_sequence,inner)
+            self.expressions.advance(token,self.output_pts_samples*1000//self.config.output_sample_rate)
             pacer.sent()
             self.counters["opus_frames"]+=1
             self.output_sequence+=1;self.output_pts_samples+=self.config.opus_frame_samples

@@ -1,5 +1,12 @@
 # Changelog
 
+## 2026-10-26
+
+- Add validated PIUU expression sequences through xAI function calling.
+- Preserve response identity across tool continuation and reject stale/duplicate calls.
+- Preview expressions on outgoing audio positions; leave CORE transport unchanged.
+- Add offline expression lifecycle and audio regression tests.
+
 ## 2026-10-12
 
 - Group backend modules by transport, conversation, audio, providers, diagnostics and legacy responsibilities.

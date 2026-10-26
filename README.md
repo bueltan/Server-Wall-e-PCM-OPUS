@@ -397,3 +397,136 @@ scripts that import them directly. No old-path shim modules are retained.
 This reorganization changes no wire formats, timing, buffer limits or provider
 behavior, and does not yet add a generic multi-provider interface. Existing offline
 tests retain their names and now import the modules by responsibility.
+
+
+## PIUU expression sequences (backend preparation)
+
+The continuous UDP v3 provider now exposes `set_expression_sequence` through xAI
+custom function calling. No MCP server, serial eye writer, new UDP packet or
+PIUU_CORE firmware change is included in this stage. Existing audio transport
+remains compatible. The backend validates a plan, preserves it across the tool
+continuation and previews it against outgoing Opus media positions in logs.
+Actual CYD presentation must later be anchored to CORE playback, not these logs.
+
+### Personality and prompt
+
+`BridgeConfig.xai_prompt` defines PIUU as a warm, curious little bird speaking
+concise Rioplatense Spanish. Questions are encouraged only when useful; it does
+not force every answer to end in a question. Tool-specific guidance lives in
+`bridge/expressions/plan.py` and is appended only when the continuous adapter
+advertises the tool. Set `expression_tools_enabled=False` in `BridgeConfig` to
+disable the tool without removing the personality prompt or built-in web search.
+Legacy v1/v2 providers do not advertise this function.
+
+The policy requests at most one sequence before audio when visual expression
+adds value, omits it for short confirmations, and continues normally if validation
+fails. It does not ask the model to predict exact audio duration or speak control
+commands. Routine blinking/gaze remains a future device-side responsibility.
+
+### Contract
+
+```json
+{
+  "sequence": [
+    {"emotion": "happy", "gesture": "soft_emphasis", "duration_ms": 2400},
+    {"emotion": "curious", "gesture": "question", "duration_ms": 1800}
+  ]
+}
+```
+
+- Exactly one top-level `sequence` array with 1–3 steps; no extra properties.
+- Every step requires `emotion`, `gesture` and `duration_ms`.
+- Emotions: neutral, happy, curious, calm, concerned, sad, excited.
+- Gestures: none, soft_emphasis, emphasis, question, acknowledge, glance, blink,
+  doubleblink, sway.
+- Duration is an integer from 1200 to 4000 ms (maximum plan 12000 ms). Booleans,
+  floats, numeric strings, malformed JSON and oversized arguments are rejected,
+  not silently clamped. Arguments are limited to 4096 UTF-8 bytes.
+- Offsets are cumulative, relative to the first played audio sample. Gesture is
+  a one-shot request at a step boundary, not a command for every audio packet.
+- A short plan falls back to neutral; a short answer cuts off the remaining plan.
+  Approximate durations do not align gestures to particular words/questions.
+
+Tool results report `status: prepared`, never claim the eyes have already moved.
+The schema and validation constants are shared in `bridge/expressions/plan.py`.
+
+### Tool response lifecycle
+
+1. The first xAI `response.created` obtains the ordinary v3 response identity.
+2. Function calls are collected until `response.done`, including calls present
+   only in its terminal output snapshot. Duplicate call IDs are ignored. A missing
+   response ID is resolved only through an explicit earlier function-item/call-ID
+   association, never by guessing the only active response.
+3. The server validates every call and returns all `function_call_output` items.
+   At most one plan is accepted. Invalid/extra/unsupported calls receive errors.
+4. Exactly one `response.create` continues a successful tool-only response after
+   all outputs are sent. A tool-only response does not enqueue an empty audio END.
+5. The continuation reuses the same v3 identity and output gate. It does not reset
+   audio playback or cancel its own plan. The first valid audio delta publishes
+   the prepared plan to the conversation coordinator.
+6. Existing output pacing, Opus encoding, END/recovery and playback acknowledgments
+   continue normally. A tool arriving after audio began is rejected and causes no
+   extra continuation.
+
+One tool-only round is allowed per spoken response. A repeated tool-only round
+fails the provider session rather than looping indefinitely. This is a protocol
+violation guard, not ordinary argument validation. A continuation arriving after
+its identity was invalidated is also rejected; the existing provider recovery
+closes the uncertain conversation rather than associating old metadata with a new
+user turn. Both behaviors need observation in live xAI testing.
+
+VAD interruption, manual history repair, output reset and provider close discard
+pending expression data. The original late-item guard remains intact. Function
+call traces are not counted as audible assistant history; existing truncation
+continues to operate on assistant audio items. Calls/plans/duplicate caches are
+bounded and there is no expression task with wall-clock sleeps.
+
+### Diagnostic preview and future CORE adapter
+
+- `EXPRESSION_PREPARED`: valid plan received from the model.
+- `EXPRESSION_REJECTED`: bounded reason code, without logging raw arguments.
+- `EXPRESSION_PLAN`: plan bound to the response identity, with offsets and total.
+- `EXPRESSION_PREVIEW clock=opus_send`: current visual step at the outgoing media
+  position; emitted only on step changes, not per frame. Skipped media positions
+  skip expired gestures rather than replaying a burst.
+- `EXPRESSION_RESET`: outgoing audio ended, response reset, cancellation or close.
+
+`ExpressionTimeline` is deliberately a backend preview, not a hardware clock.
+Audio generation completion and Opus send completion are earlier than audible
+playback completion. Future CORE integration should transmit the bounded plan
+with response identity, schedule it on playback progress, enable speaking only
+when playback starts, and cancel stale plans on interruption/finish. Do not run
+raw serial commands, block audio on visual acknowledgments, or route optional
+visual failures through the critical `ReliableEvents` failure path.
+
+The eye demo currently counts emotion hold time after its transition. This plan's
+step durations instead define positions on one continuous audio timeline. A future
+adapter must apply those positions explicitly rather than blindly translating
+steps into `emotion NAME duration` and accumulating transition delays. Explicit
+sequence gestures also need arbitration with automatic speaking gestures to
+avoid `Gesture busy` losses.
+
+### Review of the supplied prototype
+
+Kept the function name, emotion/gesture vocabulary, short sequences and separation
+of voice from eye controls. Replaced the provider-owned `eye_writer`/sleep task,
+which started before audio, outlived playback and was cancelled by the next
+`response.created`. Validation now rejects malformed values instead of reporting
+`ok` before a background task fails. Parallel tool calls are completed before one
+continuation; stale calls cannot start new gestures. The existing VAD late-event
+return was preserved: moving it inside the unknown-item condition would allow
+known stale audio to rebuild local state.
+
+### Validation
+
+Run `PYTHONPATH=src .venv/bin/python -m unittest discover -s tests -v`.
+The expression tests cover bounds/types, schema consistency, timeline expiration,
+parallel and duplicate calls, terminal-only calls, missing-ID correlation, late
+calls, cancellation, stale continuations, disabled tools and the real v3 Opus
+pipeline. No live provider request, paid voice session or device write is part of
+the offline tests. Before deployment, measure first-audio latency, validate event
+ordering with the current xAI model and exercise interruptions around tool calls.
+
+References checked 2026-10-26:
+- https://docs.x.ai/developers/model-capabilities/audio/speech-to-speech
+- https://docs.x.ai/developers/rest-api-reference/inference/voice

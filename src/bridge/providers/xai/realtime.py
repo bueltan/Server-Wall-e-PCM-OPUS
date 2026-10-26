@@ -46,17 +46,22 @@ class XaiRealtimeBridge:
     def turn_detection(self):
         return None
 
+    def expression_tools(self):
+        return []  # Legacy providers retain their original lifecycle.
+
     async def _send_session_update(self) -> None:
+        from bridge.expressions.plan import EXPRESSION_INSTRUCTIONS
+        tools = self.expression_tools()
+        instructions = self.config.xai_prompt
+        if tools: instructions += "\n\n" + EXPRESSION_INSTRUCTIONS
         await self._safe_send(
             {
                 "type": "session.update",
                 "session": {
                     "voice": self.config.xai_voice,
-                    "instructions": self.config.xai_prompt,
+                    "instructions": instructions,
                     "turn_detection": self.turn_detection(),
-                    "tools": [
-                        {"type": "web_search"},
-                    ],
+                    "tools": [{"type": "web_search"}] + tools,
                     "audio": {
                         "input": {
                             "format": {
