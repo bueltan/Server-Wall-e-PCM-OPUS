@@ -1,5 +1,13 @@
 # Changelog
 
+## 2026-10-27
+
+- Default to Gemini when PIUU_VOICE_PROVIDER is unset.
+
+- Add selectable Gemini 3.8 Live with setup confirmation and streaming 24-to-16 kHz audio.
+- Bridge expression tools and native voice interruptions into the existing UDP v3 pipeline.
+- Add offline DSP/provider/integration tests and document manual interruption and session limits.
+
 ## 2026-10-26
 
 - Add capability-negotiated binary eye plans with atomic gestures and playback offsets.

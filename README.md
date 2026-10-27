@@ -1,5 +1,93 @@
 # PIUU CORE ↔ xAI Voice bridge
 
+## Gemini Live (UDP v3)
+
+El backend permite elegir `gemini` (predeterminado) o `xai` sin cambiar el firmware,
+el protocolo UDP v3 ni el formato Opus de CORE. La selección se aplica al iniciar
+el proceso; no se cambia de proveedor dentro de una conversación.
+
+Desde la raíz del backend, con las dependencias de `src/requirements.txt` instaladas:
+
+```bash
+export PIUU_VOICE_PROVIDER=gemini
+export GEMINI_MODEL=gemini-3.8-live
+export GEMINI_VOICE=Puck
+read -rsp 'GEMINI_API_KEY: ' GEMINI_API_KEY; echo
+export GEMINI_API_KEY
+.venv/bin/python src/main.py
+```
+
+La clave debe pertenecer a un proyecto con acceso a Gemini Live. No se guarda en
+el repositorio ni se incluye en la URL WebSocket. El backend no carga archivos
+`.env` automáticamente. Para volver a xAI, usar `PIUU_VOICE_PROVIDER=xai` y la
+variable `XAI_API_KEY` habitual. No ejecutar dos servidores en el mismo puerto.
+
+Flujo implementado:
+
+1. CORE abre la conversación mediante START. Se abre el WebSocket y se espera
+   `setupComplete` antes de enviar audio o anunciar READY.
+2. PCM16 mono a 16 kHz entra por `realtimeInput.audio`. Gemini usa detección de
+   actividad automática; `voiceActivity` se traduce a eventos SPEECH_STARTED y
+   SPEECH_STOPPED. No se envían commits ni comandos de xAI.
+3. Gemini entrega PCM16 a 24 kHz. Un FIR con estado continuo convierte a 16 kHz
+   antes de grabar/encodificar Opus. Mantiene fase entre fragmentos, rechaza
+   aliasing y tiene 1,25 ms de retardo; al terminar se vacía una cola de filtro
+   de hasta 2,5 ms. No se cambia el reloj de reproducción de CORE.
+4. `set_expression_sequence` usa el mismo validador y transporte de ojos. Se
+   declara BLOCKING para preparar el plan antes del audio. El resultado de la
+   herramienta conserva la identidad de respuesta; no dispara `response.create`.
+   Se rechazan planes tardíos, repetidos o inválidos. Su entrega sigue ligada al
+   primer paquete Opus y a las capacidades negociadas con CORE.
+5. `turnComplete` termina la respuesta; `generationComplete` por sí solo no
+   produce END. Una interrupción invalida audio y ojos pendientes. El siguiente
+   turno espera la barrera de confirmación de CORE.
+
+Diferencias y límites de esta integración:
+
+- La persona de PIUU se comparte con xAI; `BridgeConfig.gemini_prompt` permite
+  reemplazarla. La configuración no incluye thinking, affective dialogue ni una
+  desactivación de proactive audio. El modelo probado por contrato es
+  `gemini-3.8-live`, no la variante `extended-thinking`.
+- La interrupción por voz usa el mecanismo nativo de Gemini. No hay truncado
+  remoto exacto por los milisegundos realmente reproducidos por CORE: el log
+  `GEMINI_NATIVE_INTERRUPTION` informa `playback_history_truncated=False`.
+  El historial del proveedor puede incluir audio que CORE todavía no reprodujo.
+- Un INTERRUPT manual de CORE cierra la conversación de forma segura y requiere
+  un nuevo START. No se simula una cancelación mediante texto ni se reutiliza un
+  historial incierto. CANCEL conserva el cierre normal de conversación.
+- Ante `goAway`, desconexión o error se cierra la conversación y se permite un
+  nuevo START. Todavía no hay reanudación de sesión ni reconexión transparente:
+  no se reenvían audio, herramientas ni respuestas de resultado incierto.
+- Las herramientas de búsqueda web de xAI no se trasladan a Gemini. Esta
+  integración habilita únicamente la herramienta visual.
+- Las pruebas son offline. Falta validar credenciales/acceso, voz, latencia,
+  interrupciones y ojos con Gemini real y el hardware. El ejemplo adjunto no
+  constituye una garantía de duración de sesión o de cuota gratuita.
+
+Diagnóstico: `BOOT provider=gemini`, `GEMINI_READY`, `GEMINI_FIRST_AUDIO`,
+`GEMINI_USAGE`, `GEMINI_NATIVE_INTERRUPTION`, `GEMINI_GO_AWAY` y
+`PROVIDER_DISCONNECTED provider=gemini`. Las transcripciones tienen etiquetas
+`GEMINI_USER` y `GEMINI_ASSISTANT`. Mantener las precauciones habituales al
+compartir grabaciones y transcripciones.
+
+Pruebas sin conexión ni consumo de API:
+
+```bash
+PYTHONPATH=src .venv/bin/python -m unittest discover -s tests
+```
+
+Para la prueba integrada: activar WALLE, pedir una respuesta corta, comprobar
+`GEMINI_READY` y audio inteligible; pedir una respuesta expresiva y comprobar
+`EXPRESSION_PREPARED` y entrega del plan; interrumpir hablando y verificar que
+se corta el audio anterior y llega una nueva respuesta. No hacen falta logs USB
+de CORE: usar los del servidor y EARS, junto con la reproducción y los ojos.
+
+Referencias oficiales:
+[modelo](https://ai.google.dev/gemini-api/docs/models/gemini-3.8-live),
+[protocolo Live](https://ai.google.dev/api/live),
+[herramientas](https://ai.google.dev/gemini-api/docs/live-api/tools).
+
+
 Backend Python para PCM16LE mono a **16 kHz** desde CORE y respuestas Opus de
 20 ms hacia CORE. El micrófono entra a CORE desde C3_EARS por UART; el backend
 no depende de ese driver. Bluetooth queda fuera de esta etapa.

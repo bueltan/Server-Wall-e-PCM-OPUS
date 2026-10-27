@@ -23,6 +23,11 @@ class VadXai(TaggedXai):
         self.repaired_responses = {}
         self.cancel_operations = {}
 
+    def release_response(self, token):
+        self.items.pop(token, None); self.done.pop(token, None)
+        self.response_ids.pop(token, None); self.output_done.discard(token)
+        self.audio_totals.pop(token, None)
+
     def expression_tools(self):
         return [tool_schema()] if self.config.expression_tools_enabled else []
 

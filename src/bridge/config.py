@@ -1,5 +1,5 @@
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Optional
 
 
@@ -7,6 +7,17 @@ from typing import Optional
 class BridgeConfig:
     host: str = "0.0.0.0"
     port: int = 9999
+
+    # Selection applies to continuous UDP v3; legacy adapters remain xAI-only.
+    voice_provider: str = field(default_factory=lambda: os.getenv("PIUU_VOICE_PROVIDER", "gemini").strip().lower())
+    gemini_api_key: Optional[str] = field(default_factory=lambda: os.getenv("GEMINI_API_KEY"))
+    gemini_model: str = field(default_factory=lambda: os.getenv("GEMINI_MODEL", "gemini-3.8-live"))
+    gemini_voice: str = field(default_factory=lambda: os.getenv("GEMINI_VOICE", "Puck"))
+    gemini_prompt: Optional[str] = None  # Reuse the PIUU persona unless overridden.
+    gemini_realtime_url: str = (
+        "wss://generativelanguage.googleapis.com/ws/"
+        "google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent"
+    )
 
     xai_realtime_url: str = "wss://api.x.ai/v1/realtime?model=grok-voice-latest"  # ← actualizado
     xai_api_key: Optional[str] = os.getenv("XAI_API_KEY")

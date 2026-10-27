@@ -65,7 +65,7 @@ class ModelTests(unittest.TestCase):
 
 class SessionTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
-        cfg=replace(BridgeConfig(),save_input_wav=False,save_output_wav=False,
+        cfg=replace(BridgeConfig(),voice_provider="xai",save_input_wav=False,save_output_wav=False,
                     output_send_interval_sec=0,output_end_repeat_interval=0,provider_input_send_interval_sec=0)
         self.s=ContinuousSession(cfg);self.s.transport=Transport()
         self.peer=('127.0.0.1',1234)
@@ -597,7 +597,7 @@ class SessionTests(unittest.IsolatedAsyncioTestCase):
 class ReliableTests(unittest.IsolatedAsyncioTestCase):
     async def test_idle_backend_does_not_open_provider(self):
         from unittest.mock import AsyncMock
-        s=ContinuousSession(replace(BridgeConfig(),save_input_wav=False,save_output_wav=False))
+        s=ContinuousSession(replace(BridgeConfig(),voice_provider="xai",save_input_wav=False,save_output_wav=False))
         s.xai.connect=AsyncMock()
         s.connection_made(Transport());await settle()
         s.xai.connect.assert_not_awaited()

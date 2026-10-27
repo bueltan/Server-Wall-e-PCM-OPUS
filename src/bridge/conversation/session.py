@@ -10,7 +10,7 @@ from bridge.conversation.state import Conversation
 from bridge.transport.protocols.conversation import Identity, Packet, Kind, Event, encode, decode, CAP_EYES_PLAN
 from bridge.expressions.delivery import EyePlanDelivery
 from bridge.transport.reliable_events import ReliableEvents
-from bridge.providers.xai.vad import VadXai
+from bridge.providers import create_provider
 from bridge.transport.ingress import InboundSession
 from bridge.audio.provider_input import ProviderInput
 from bridge.diagnostics.logging import event
@@ -43,7 +43,8 @@ class ContinuousSession(AudioPipeline):
         self.last_activity = time.monotonic()
         self.counters = dict(invalid=0, foreign=0, stale=0, stale_output=0, opus_frames=0)
         self.events = ReliableEvents(self._wire, self.fail)
-        self.xai = VadXai(config, self.output_pcm_queue, self.output_valid, self.provider_event)
+        # Keep the internal xai alias for existing pipeline/legacy compatibility.
+        self.xai = create_provider(config, self.output_pcm_queue, self.output_valid, self.provider_event)
         self.input = self.new_input()
         self.downlink = DownlinkRecovery(config,self._send)
         self.eye_plans = EyePlanDelivery(self._wire)
@@ -243,7 +244,7 @@ class ContinuousSession(AudioPipeline):
                     self.last_activity=time.monotonic()
                     self.events.reset(); self.startup.clear(); self.input_live=False
                     self.input=self.new_input(); self.reset_output()
-                    self.provider_task=asyncio.create_task(self.run_provider(p.identity),name='active-xai')
+                    self.provider_task=asyncio.create_task(self.run_provider(p.identity),name='active-provider')
                     self.ack(p); event('CONVERSATION_OPEN',p.identity)
                 elif p.kind == Kind.CANCEL:
                     if p.identity.turn<self.last_conversation:
@@ -259,9 +260,7 @@ class ContinuousSession(AudioPipeline):
                         self.downlink.reset()
                         self.eye_plans.reset()
                         self.conversation.played(token); self.last_activity=time.monotonic()
-                        self.xai.items.pop(token,None); self.xai.done.pop(token,None)
-                        self.xai.response_ids.pop(token,None); self.xai.output_done.discard(token)
-                        self.xai.audio_totals.pop(token,None)
+                        self.xai.release_response(token)
                         event('PLAYBACK_FINISHED',token,played_ms=int.from_bytes(p.body,'big'))
                     self.ack(p)
                 else:
@@ -325,7 +324,7 @@ class ContinuousSession(AudioPipeline):
             async def handshake():
                 nonlocal receiver
                 await self.xai.connect()
-                receiver=asyncio.create_task(self.xai.receive_events_forever(),name='xai-events')
+                receiver=asyncio.create_task(self.xai.receive_events_forever(),name='provider-events')
                 ready=asyncio.create_task(self.xai.ready_event.wait())
                 try:
                     done,_=await asyncio.wait([ready,receiver],return_when=asyncio.FIRST_COMPLETED)
@@ -355,7 +354,8 @@ class ContinuousSession(AudioPipeline):
             await receiver
         except asyncio.CancelledError: raise
         except Exception as exc:
-            event('XAI_DISCONNECTED',token,error=type(exc).__name__,reason=str(exc)[:160])
+            event('PROVIDER_DISCONNECTED',token,provider=self.config.voice_provider,
+                  error=type(exc).__name__,reason=str(exc)[:160])
         finally:
             if receiver:
                 receiver.cancel()
