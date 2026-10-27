@@ -18,8 +18,9 @@ class BridgeConfig:
         "ayude a la conversación; no fuerces preguntas ni prolongues despedidas "
         "o confirmaciones. Adaptá el tono al contexto sin exagerar emociones."
     )
-    # Continuous v3 provider only; no visual UDP messages until CORE integration.
+    # Continuous v3 provider tool and optional capability-negotiated visual transport.
     expression_tools_enabled: bool = True
+    expression_udp_enabled: bool = True
 
 
     input_sample_rate: int = 16000

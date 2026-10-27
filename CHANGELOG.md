@@ -2,9 +2,13 @@
 
 ## 2026-10-26
 
+- Add capability-negotiated binary eye plans with atomic gestures and playback offsets.
+- Bound visual ACK retries without gating audio; clear plans on interruption and close.
+- Document the wire contract and pending CORE scheduler; test negotiation and delivery faults.
+
 - Add validated PIUU expression sequences through xAI function calling.
 - Preserve response identity across tool continuation and reject stale/duplicate calls.
-- Preview expressions on outgoing audio positions; leave CORE transport unchanged.
+- Preview expressions on outgoing audio positions independently of device delivery.
 - Add offline expression lifecycle and audio regression tests.
 
 ## 2026-10-12

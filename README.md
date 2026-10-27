@@ -399,14 +399,19 @@ behavior, and does not yet add a generic multi-provider interface. Existing offl
 tests retain their names and now import the modules by responsibility.
 
 
-## PIUU expression sequences (backend preparation)
+## PIUU expression sequences and optional UDP delivery
 
 The continuous UDP v3 provider now exposes `set_expression_sequence` through xAI
-custom function calling. No MCP server, serial eye writer, new UDP packet or
-PIUU_CORE firmware change is included in this stage. Existing audio transport
-remains compatible. The backend validates a plan, preserves it across the tool
-continuation and previews it against outgoing Opus media positions in logs.
-Actual CYD presentation must later be anchored to CORE playback, not these logs.
+custom function calling. The backend validates a plan, preserves its response
+identity across tool continuation, and sends an atomic binary plan when CORE
+advertises eye-plan support. Existing CORE audio remains compatible; clients
+without that capability receive no new packets. No MCP or serial writer is used.
+
+PIUU_CORE now implements kind-26/27 negotiation, receipt ACKs and a scheduler
+using an estimated consumed-I2S-sample clock. Hardware validation remains pending. See
+[PIUU eye-plan wire contract](PROTOCOLO_EYES_V1.md) for capability negotiation,
+exact bytes/IDs, ACK/retry rules and CORE scheduling behavior. No firmware or deployment
+change is included here. Preview logs are not proof of CYD presentation.
 
 ### Personality and prompt
 
@@ -421,7 +426,7 @@ Legacy v1/v2 providers do not advertise this function.
 The policy requests at most one sequence before audio when visual expression
 adds value, omits it for short confirmations, and continues normally if validation
 fails. It does not ask the model to predict exact audio duration or speak control
-commands. Routine blinking/gaze remains a future device-side responsibility.
+commands. Routine blinking/gaze remains a device-side responsibility.
 
 ### Contract
 
@@ -481,7 +486,7 @@ call traces are not counted as audible assistant history; existing truncation
 continues to operate on assistant audio items. Calls/plans/duplicate caches are
 bounded and there is no expression task with wall-clock sleeps.
 
-### Diagnostic preview and future CORE adapter
+### Diagnostic preview and UDP transport
 
 - `EXPRESSION_PREPARED`: valid plan received from the model.
 - `EXPRESSION_REJECTED`: bounded reason code, without logging raw arguments.
@@ -491,20 +496,32 @@ bounded and there is no expression task with wall-clock sleeps.
   skip expired gestures rather than replaying a burst.
 - `EXPRESSION_RESET`: outgoing audio ended, response reset, cancellation or close.
 
-`ExpressionTimeline` is deliberately a backend preview, not a hardware clock.
-Audio generation completion and Opus send completion are earlier than audible
-playback completion. Future CORE integration should transmit the bounded plan
-with response identity, schedule it on playback progress, enable speaking only
-when playback starts, and cancel stale plans on interruption/finish. Do not run
-raw serial commands, block audio on visual acknowledgments, or route optional
-visual failures through the critical `ReliableEvents` failure path.
+`ExpressionTimeline` remains a backend preview, not a hardware clock. The separate
+`EyePlanDelivery` sends one complete plan immediately before the first Opus frame,
+after `RESPONSE_STARTED` is acknowledged. The plan carries cumulative offsets from
+playback start, so CORE can execute it despite network/jitter-buffer delay.
 
-The eye demo currently counts emotion hold time after its transition. This plan's
-step durations instead define positions on one continuous audio timeline. A future
-adapter must apply those positions explicitly rather than blindly translating
-steps into `emotion NAME duration` and accumulating transition delays. Explicit
-sequence gestures also need arbitration with automatic speaking gestures to
-avoid `Gesture busy` losses.
+`BridgeConfig.expression_udp_enabled=True` enables negotiation (HELLO offer and
+HELLO_ACK bit `0x0004`). Existing clients offering zero keep the previous flags
+and audio behavior. With no negotiated support, only the previous preview runs.
+A client must keep its capability offer stable until it creates a new session nonce.
+
+The packet is at most **66 bytes including the v3 envelope**, with 1–3 combined
+emotion/gesture steps. ACK confirms receipt only. Delivery uses at most three
+attempts, at least 100 ms apart, and expires after 500 ms. Neither a missing ACK
+nor a local visual send error blocks/fails audio. The existing recovery loop polls
+retries; there is no per-expression task or wall-clock animation loop.
+
+`EYES_PLAN_SENT`, `EYES_PLAN_ACK`, `EYES_PLAN_UNCONFIRMED`, `EYES_PLAN_SEND_ERROR`
+and `EYES_PLAN_STATS` expose delivery. A short audio response ends its visual plan
+at actual playback completion; Opus send completion does not send a premature
+neutral command. Cancellation/reset/close discards retries and rejects stale ACKs.
+
+Durations include transitions and define a continuous playback timeline. CORE must
+not translate them to legacy `emotion NAME duration` holds that start after each
+transition. Exact duplicate plans must be ACKed without restarting any gesture;
+late plans skip expired gestures. See the wire contract for the full scheduler and
+EARS/automatic-gesture arbitration requirements.
 
 ### Review of the supplied prototype
 
@@ -523,7 +540,9 @@ Run `PYTHONPATH=src .venv/bin/python -m unittest discover -s tests -v`.
 The expression tests cover bounds/types, schema consistency, timeline expiration,
 parallel and duplicate calls, terminal-only calls, missing-ID correlation, late
 calls, cancellation, stale continuations, disabled tools and the real v3 Opus
-pipeline. No live provider request, paid voice session or device write is part of
+pipeline. `test_eye_transport.py` adds wire vectors, negotiation, retries, ACK
+validation, tool-to-wire integration and nonblocking audio. No live provider
+request, paid voice session or device write is part of
 the offline tests. Before deployment, measure first-audio latency, validate event
 ordering with the current xAI model and exercise interruptions around tool calls.
 

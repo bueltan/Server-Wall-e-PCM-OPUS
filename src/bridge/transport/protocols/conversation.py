@@ -9,6 +9,7 @@ from enum import IntEnum
 VERSION = 3
 HEADER = struct.Struct('!4sBBHQQIIIH')
 MAX_BODY = 658
+CAP_EYES_PLAN = 0x0004  # Optional HELLO offer / HELLO_ACK acceptance.
 
 class Kind(IntEnum):
     HELLO=1
@@ -35,6 +36,9 @@ class Kind(IntEnum):
     DOWNLINK_NACK=22
     AUDIO_END=23
     AUDIO_END_ACK=24
+    EYES=25  # Existing immediate ASCII command, reserved here; no automatic fallback.
+    EYES_PLAN=26
+    EYES_PLAN_ACK=27
 
 @dataclass(frozen=True)
 class Identity:

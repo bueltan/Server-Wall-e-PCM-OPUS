@@ -7,7 +7,8 @@ import time
 from bridge.audio.pipeline import AudioPipeline
 from bridge.transport.downlink_recovery import DownlinkRecovery
 from bridge.conversation.state import Conversation
-from bridge.transport.protocols.conversation import Identity, Packet, Kind, Event, encode, decode
+from bridge.transport.protocols.conversation import Identity, Packet, Kind, Event, encode, decode, CAP_EYES_PLAN
+from bridge.expressions.delivery import EyePlanDelivery
 from bridge.transport.reliable_events import ReliableEvents
 from bridge.providers.xai.vad import VadXai
 from bridge.transport.ingress import InboundSession
@@ -45,6 +46,9 @@ class ContinuousSession(AudioPipeline):
         self.xai = VadXai(config, self.output_pcm_queue, self.output_valid, self.provider_event)
         self.input = self.new_input()
         self.downlink = DownlinkRecovery(config,self._send)
+        self.eye_plans = EyePlanDelivery(self._wire)
+        self.peer_eye_offer = None
+        self.eyes_capable = False
 
     def new_input(self):
         self.provider_input=ProviderInput(self.config,self._accept_audio,self.xai.wait_input_ready)
@@ -83,8 +87,10 @@ class ContinuousSession(AudioPipeline):
     def datagram_received(self, data, addr):
         try: p = decode(data)
         except (ValueError, struct.error): self.counters['invalid'] += 1; return
-        if p.flags or not p.identity.client: self.counters['invalid'] += 1; return
+        allowed_flags = CAP_EYES_PLAN if p.kind == Kind.HELLO else 0
+        if p.flags & ~allowed_flags or not p.identity.client: self.counters['invalid'] += 1; return
         if p.kind == Kind.HELLO:
+            new_peer = self.client_nonce is None or p.identity.client != self.client_nonce
             if p.body or p.identity.server or p.identity.turn or p.identity.response: return
             if self.client_nonce is None:
                 self.client_nonce = p.identity.client; self.remote_addr = addr
@@ -99,8 +105,16 @@ class ContinuousSession(AudioPipeline):
                 self.client_nonce = p.identity.client
                 self.server_nonce = secrets.randbits(64) or 1
                 self.last_conversation = 0; self.acks.clear()
+            offered = bool(p.flags & CAP_EYES_PLAN)
+            if new_peer:
+                self.peer_eye_offer = offered
+                self.eyes_capable = offered and self.config.expression_udp_enabled
+                self.eye_plans.reset()
+            elif offered != self.peer_eye_offer:
+                self.counters['invalid'] += 1; return  # Capabilities are fixed for a client nonce.
             self.last_peer_seen=time.monotonic()
-            self._send(Kind.HELLO_ACK, Identity(self.client_nonce,self.server_nonce,0,0),p.sequence,flags=2|int(self.ready()))
+            capabilities = CAP_EYES_PLAN if self.eyes_capable else 0
+            self._send(Kind.HELLO_ACK, Identity(self.client_nonce,self.server_nonce,0,0),p.sequence,flags=2|capabilities|int(self.ready()))
             return
         if addr != self.remote_addr or p.identity.client != self.client_nonce:
             self.counters['foreign'] += 1; return
@@ -131,6 +145,12 @@ class ContinuousSession(AudioPipeline):
             self.controls.put_nowait(p); return
         if current is None or p.identity.client != current.client or p.identity.turn != current.turn:
             self.counters['stale'] += 1; return
+        if p.kind == Kind.EYES_PLAN_ACK:
+            if p.identity != self.conversation.response:
+                self.counters['stale'] += 1; return
+            if self.eye_plans.acknowledge(p): self.last_peer_seen=time.monotonic()
+            else: self.counters['invalid'] += 1
+            return
         if p.kind in (Kind.DOWNLINK_NACK,Kind.AUDIO_END_ACK):
             if p.identity != self.conversation.response:
                 self.counters['stale'] += 1; return
@@ -165,7 +185,7 @@ class ContinuousSession(AudioPipeline):
         if self.conversation.identity is None: return None
         self.last_activity = time.monotonic()
         if kind == 'expression.plan':
-            if self.output_valid(message['identity']):
+            if self.output_valid(message['identity']) and self.output_sequence == 0 and self.expressions.plan is None:
                 self.expressions.prepare(message['identity'], message['plan'])
             return
         if kind == 'input_audio_buffer.speech_started':
@@ -194,6 +214,17 @@ class ContinuousSession(AudioPipeline):
             self.schedule(self.allow_output(token, future))
             event('RESPONSE_STARTED',token,utterance=self.conversation.utterance)
             return token
+
+    def send_expression_plan(self, token):
+        # Called at first Opus transmission, after RESPONSE_STARTED ACK. No wait,
+        # per-step tasks, or dependency on the visual receipt acknowledgement.
+        if (not self.eyes_capable or not self.output_valid(token) or
+                self.expressions.identity != token or self.expressions.plan is None):
+            return
+        try:
+            self.eye_plans.start(token, self.expressions.plan)
+        except ValueError:
+            event('EYES_PLAN_REJECTED', token, reason='invalid_wire_plan')
 
     async def allow_output(self, token, future):
         try:
@@ -226,6 +257,7 @@ class ContinuousSession(AudioPipeline):
                     if token and p.identity==token:
                         event('OUTPUT_RECOVERY_COMPLETE',token,**self.downlink.stats)
                         self.downlink.reset()
+                        self.eye_plans.reset()
                         self.conversation.played(token); self.last_activity=time.monotonic()
                         self.xai.items.pop(token,None); self.xai.done.pop(token,None)
                         self.xai.response_ids.pop(token,None); self.xai.output_done.discard(token)
@@ -260,6 +292,7 @@ class ContinuousSession(AudioPipeline):
     async def close_remote(self, token, played):
         self.closing=True
         self.conversation.close(); self.input.close(); self.provider_input.close(); self.input_live=False
+        self.eye_plans.reset()  # Before awaiting history/input/provider cleanup.
         self.startup.clear(); self.events.reset()
         await self.interruptions.close()
         for task in list(self.repairs):
@@ -336,6 +369,10 @@ class ContinuousSession(AudioPipeline):
     async def recover_output(self):
         while True:
             await asyncio.sleep(.02)
+            if self.eye_plans.identity is not None and not self.output_valid(self.eye_plans.identity):
+                self.eye_plans.reset()
+            else:
+                self.eye_plans.poll()
             if not self.downlink.poll():
                 await self.fail('output_end_unconfirmed')
 
@@ -356,6 +393,7 @@ class ContinuousSession(AudioPipeline):
             if self.conversation.response:
                 event('OUTPUT_PACING_STATS',self.conversation.response,**self.output_pacer.stats())
                 event('OUTPUT_RECOVERY_STATS',self.conversation.response,**self.downlink.stats)
+                event('EYES_PLAN_STATS',self.conversation.response,enabled=self.eyes_capable,**self.eye_plans.stats)
 
     async def check_timeouts(self, now):
         age=now-self.last_peer_seen
@@ -366,6 +404,8 @@ class ContinuousSession(AudioPipeline):
 
     def connection_lost(self, exc):
         self.conversation.close(); self.input.close(); self.provider_input.close(); self.events.close(); self.downlink.reset()
+        self.eye_plans.reset()
+        self.expressions.reset('connection_lost')
         if self.provider_task: self.provider_task.cancel()
         for task in self.tasks: task.cancel()
         for task in self.repairs: task.cancel()

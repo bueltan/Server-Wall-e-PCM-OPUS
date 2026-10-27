@@ -33,6 +33,7 @@ class AudioPipeline:
 
     def reset_output(self):
         self.expressions.reset('output_reset')
+        if hasattr(self, 'eye_plans'): self.eye_plans.reset()
         if hasattr(self,'downlink'): self.downlink.reset()
         self.output_pacer=self.new_pacer()
         self.output_sequence = self.output_pts_samples = 0
@@ -101,6 +102,8 @@ class AudioPipeline:
             if not self.output_valid(token) or pacer is not self.output_pacer: return
             if hasattr(self,'downlink'):
                 self.downlink.remember(token,self.output_sequence,inner)
+            if self.output_sequence == 0 and hasattr(self, 'send_expression_plan'):
+                self.send_expression_plan(token)
             self._send(Kind.OPUS,token,self.output_sequence,inner)
             self.expressions.advance(token,self.output_pts_samples*1000//self.config.output_sample_rate)
             pacer.sent()

@@ -126,3 +126,15 @@ con el uso de xAI, no únicamente con nuestros temporizadores.
 Se registra XAI_USAGE con billable_audio_seconds cuando el proveedor lo incluye.
 Fuentes: https://docs.x.ai/developers/models/speech-to-speech y
 https://docs.x.ai/developers/rest-api-reference/inference/voice.
+
+
+## Extensión opcional de ojos
+
+El backend implementa `EYES_PLAN=26` y `EYES_PLAN_ACK=27`, negociados mediante
+bit `0x0004` en HELLO/HELLO_ACK. `EYES=25` queda reservado para los comandos
+inmediatos de CORE; este emisor usa planes binarios y no envía ese tipo.
+Los clientes actuales con HELLO flags=0 mantienen su handshake y audio.
+El cuerpo máximo del plan es 28 bytes (66 con cabecera), con hasta tres pasos
+atómicos de emoción/gesto y offsets de reproducción. La falta de ACK visual no
+bloquea ni cancela audio. CORE ya implementa recepción/planificación y anuncia soporte; queda validar
+la sincronía y el uso de recursos en hardware. Contrato completo y vectores: [PROTOCOLO_EYES_V1.md](PROTOCOLO_EYES_V1.md).
