@@ -13,8 +13,8 @@ TOOL_NAME = 'set_expression_sequence'
 
 EXPRESSION_INSTRUCTIONS = '''
 Disponés de set_expression_sequence para acompañar visualmente tu respuesta.
-Si aporta expresividad, llamala una sola vez antes de hablar, con 1 a 3 pasos.
-Para respuestas de una palabra o confirmaciones breves, omitila.
+Si aporta expresividad, llamala una sola vez antes de hablar, con 3 a 8 pasos.
+Para respuestas de una palabra o confirmaciones breves solo un paso.
 Usá emotion neutral, happy, curious, calm, concerned, sad o excited.
 Preferí neutral, happy o curious; sad y excited solo cuando el contexto lo justifica.
 Usá gesture none por defecto; question solo si realmente vas a preguntar.
