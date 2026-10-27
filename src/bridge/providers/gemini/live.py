@@ -13,7 +13,6 @@ from bridge.audio.resample import Pcm24To16
 from bridge.diagnostics.logging import event
 from bridge.expressions.plan import EXPRESSION_INSTRUCTIONS, TOOL_NAME, parse_plan, tool_schema
 
-
 class GeminiLive:
     def __init__(self, config, queue, valid, events):
         if (config.input_sample_rate, config.output_sample_rate,
@@ -42,12 +41,30 @@ class GeminiLive:
 
     def setup(self):
         prompt = self.config.gemini_prompt or self.config.xai_prompt
+        
+        # Corrección de configuración de voz: discrimina entre custom y prebuilt
+        voice_id = self.config.gemini_voice.strip()
+        if voice_id.startswith("voice_") or voice_id.startswith("voices/"):
+            voice_config = {
+                'customVoiceConfig': {
+                    'customVoice': voice_id
+                }
+            }
+        else:
+            voice_config = {
+                'prebuiltVoiceConfig': {
+                    'voiceName': voice_id
+                }
+            }
+
         setup = {
             'model': 'models/' + self.config.gemini_model.removeprefix('models/'),
             'generationConfig': {
                 'responseModalities': ['AUDIO'],
-                'speechConfig': {'voiceConfig': {
-                    'prebuiltVoiceConfig': {'voiceName': self.config.gemini_voice}}}},
+                'speechConfig': {
+                    'voiceConfig': voice_config
+                }
+            },
             'systemInstruction': {'parts': [{'text': prompt + (
                 '\n\n' + EXPRESSION_INSTRUCTIONS if self.config.expression_tools_enabled else '')}]},
             'realtimeInputConfig': {'automaticActivityDetection': {'disabled': False},

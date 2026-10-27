@@ -8,7 +8,7 @@ class BridgeConfig:
     host: str = "0.0.0.0"
     port: int = 9999
 
-    # Selection applies to continuous UDP v3; legacy adapters remain xAI-only.
+# Selection applies to continuous UDP v3; legacy adapters remain xAI-only.
     voice_provider: str = field(default_factory=lambda: os.getenv("PIUU_VOICE_PROVIDER", "gemini").strip().lower())
     gemini_api_key: Optional[str] = field(default_factory=lambda: os.getenv("GEMINI_API_KEY"))
     gemini_model: str = field(default_factory=lambda: os.getenv("GEMINI_MODEL", "gemini-3.8-live"))
