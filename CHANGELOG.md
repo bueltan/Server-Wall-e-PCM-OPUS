@@ -2,6 +2,9 @@
 
 ## 2026-10-27
 
+- Revert incompatible custom-voice changes and restore the Live handshake and 1–3 expression steps.
+- Add PIUU baby-bird delivery instructions over the prebuilt Puck voice.
+
 - Default to Gemini when PIUU_VOICE_PROVIDER is unset.
 
 - Add selectable Gemini 3.8 Live with setup confirmation and streaming 24-to-16 kHz audio.

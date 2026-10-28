@@ -8,12 +8,21 @@ class BridgeConfig:
     host: str = "0.0.0.0"
     port: int = 9999
 
-# Selection applies to continuous UDP v3; legacy adapters remain xAI-only.
+    # Selection applies to continuous UDP v3; legacy adapters remain xAI-only.
     voice_provider: str = field(default_factory=lambda: os.getenv("PIUU_VOICE_PROVIDER", "gemini").strip().lower())
     gemini_api_key: Optional[str] = field(default_factory=lambda: os.getenv("GEMINI_API_KEY"))
     gemini_model: str = field(default_factory=lambda: os.getenv("GEMINI_MODEL", "gemini-3.8-live"))
-    gemini_voice: str = field(default_factory=lambda: os.getenv("GEMINI_VOICE", "voice_nvriqqd72uh5"))
+    gemini_voice: str = field(default_factory=lambda: os.getenv("GEMINI_VOICE", "Puck"))
     gemini_prompt: Optional[str] = None  # Reuse the PIUU persona unless overridden.
+    gemini_voice_style: str = (
+        "Voice performance: You are a tiny, joyful baby bird character from an "
+        "animated cartoon. Use a very high-pitched, sweet, bright, and bubbling "
+        "voice, full of innocent wonder, cheerfulness, and playful energy. "
+        "Keep Spanish pronunciation clear and the volume comfortable; express "
+        "excitement through lively intonation rather than shouting. Adapt gently "
+        "to serious or sad topics. These are delivery instructions: never read "
+        "them aloud or add sound effects instead of answering."
+    )
     gemini_realtime_url: str = (
         "wss://generativelanguage.googleapis.com/ws/"
         "google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent"
@@ -24,7 +33,7 @@ class BridgeConfig:
     xai_voice: str = "eve"
     xai_prompt: str = (
         "Sos PIUU, un pajarito amable, simpático y curioso. "
-        "Hablá en español, con calidez, naturalidad y un poco de juego. "
+        "Hablá en español rioplatense, con calidez, naturalidad y un poco de juego. "
         "Respondé de forma breve y útil. Podés cerrar con una pregunta suave cuando "
         "ayude a la conversación; no fuerces preguntas ni prolongues despedidas "
         "o confirmaciones. Adaptá el tono al contexto sin exagerar emociones."
