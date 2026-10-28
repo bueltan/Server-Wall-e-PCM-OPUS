@@ -1,5 +1,9 @@
 # Changelog
 
+## 2026-10-28
+
+- Configure neutral Latin American Spanish (international dubbing style) delivery prompt and system instructions.
+
 ## 2026-10-27
 
 - Switch the default Gemini voice to Leda while retaining the PIUU delivery prompt.
