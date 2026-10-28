@@ -13,6 +13,39 @@ from bridge.audio.resample import Pcm24To16
 from bridge.diagnostics.logging import event
 from bridge.expressions.plan import EXPRESSION_INSTRUCTIONS, TOOL_NAME, parse_plan, tool_schema
 
+import asyncio
+import base64
+import json
+import os
+from dataclasses import dataclass, field
+from typing import Optional
+import websockets
+
+
+@dataclass(frozen=True)
+class BridgeConfig:
+    host: str = "0.0.0.0"
+    port: int = 9999
+
+    # Selección de proveedor para UDP v3
+    voice_provider: str = field(default_factory=lambda: os.getenv("PIUU_VOICE_PROVIDER", "gemini").strip().lower())
+    gemini_api_key: Optional[str] = field(default_factory=lambda: os.getenv("GEMINI_API_KEY"))
+    gemini_model: str = field(default_factory=lambda: os.getenv("GEMINI_MODEL", "gemini-3.8-live"))
+    gemini_voice: str = field(default_factory=lambda: os.getenv("GEMINI_VOICE", "voice_nvriqqd72uh5"))
+    gemini_prompt: Optional[str] = None
+    gemini_realtime_url: str = (
+        "wss://generativelanguage.googleapis.com/ws/"
+        "google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent"
+    )
+    provider_open_timeout_sec: float = 20.0
+    input_sample_rate: int = 16000
+    output_sample_rate: int = 16000
+    channels: int = 1
+    sample_width: int = 2
+    expression_tools_enabled: bool = False
+    xai_prompt: str = ""
+
+
 class GeminiLive:
     def __init__(self, config, queue, valid, events):
         if (config.input_sample_rate, config.output_sample_rate,
@@ -42,7 +75,7 @@ class GeminiLive:
     def setup(self):
         prompt = self.config.gemini_prompt or self.config.xai_prompt
         
-        # Corrección de configuración de voz: discrimina entre custom y prebuilt
+        # Discriminación de voz: ID personalizado vs predefinida
         voice_id = self.config.gemini_voice.strip()
         if voice_id.startswith("voice_") or voice_id.startswith("voices/"):
             voice_config = {
@@ -73,8 +106,6 @@ class GeminiLive:
         }
         if self.config.expression_tools_enabled:
             schema = tool_schema()
-            # JSON Schema is supported through parametersJsonSchema. BLOCKING
-            # ensures that the plan is prepared before the spoken continuation.
             setup['tools'] = [{'functionDeclarations': [{
                 'name': schema['name'], 'description': schema['description'],
                 'parametersJsonSchema': schema['parameters'], 'behavior': 'BLOCKING'}]}]
@@ -91,13 +122,26 @@ class GeminiLive:
         self.terminal.clear()
         self.speaking = self.retired = False
         self._reset_turn()
-        # Keep credentials out of URLs, exception messages and diagnostics.
-        self.ws = await websockets.connect(self.config.gemini_realtime_url,
+        
+        self.ws = await websockets.connect(
+            self.config.gemini_realtime_url,
             additional_headers={'x-goog-api-key': key},
-            open_timeout=self.config.provider_open_timeout_sec, close_timeout=2,
-            ping_interval=15, ping_timeout=30, max_queue=64, max_size=2**20)
+            open_timeout=self.config.provider_open_timeout_sec,
+            close_timeout=2,
+            ping_interval=15,
+            ping_timeout=30,
+            max_queue=64,
+            max_size=2**20
+        )
+        
+        # Enviar configuración inicial
         await self._send(self.setup())
-        # connect() opens transport only; session waits for setupComplete.
+        
+        # Esperar confirmación del backend (setupComplete)
+        try:
+            await asyncio.wait_for(self.ready_event.wait(), timeout=10.0)
+        except asyncio.TimeoutError:
+            raise RuntimeError('Timeout waiting for Gemini setupComplete response')
 
     async def _send(self, payload):
         if self.ws is None:
@@ -110,9 +154,18 @@ class GeminiLive:
             return False
         if len(pcm) % 2:
             raise ValueError('PCM16 input must have complete samples')
-        await self._send({'realtimeInput': {'audio': {
-            'mimeType': 'audio/pcm;rate=16000',
-            'data': base64.b64encode(pcm).decode('ascii')}}})
+        
+        # Protocolo BidiGenerateContent con mediaChunks
+        await self._send({
+            'realtimeInput': {
+                'mediaChunks': [
+                    {
+                        'mimeType': 'audio/pcm;rate=16000',
+                        'data': base64.b64encode(pcm).decode('ascii')
+                    }
+                ]
+            }
+        })
         return True
 
     def pause_input(self):
@@ -128,8 +181,6 @@ class GeminiLive:
         await self.history_ready.wait()
 
     async def cancel_response(self, token):
-        # Do not inject a synthetic user utterance or silently claim cancellation.
-        # Coordinator fails/closes this conversation; a fresh START is safe.
         raise RuntimeError('Gemini manual interruption requires a new conversation')
 
     async def repair_history(self, token, played_ms, **kwargs):
@@ -167,8 +218,6 @@ class GeminiLive:
 
     async def _ensure_response(self):
         if self.token is None:
-            # The receiver must keep reading interruption/turnComplete first;
-            # only a NEW response waits for CORE's interruption ACK barrier.
             await self.history_ready.wait()
             self._speech_end()
             self._reset_turn()
@@ -229,7 +278,6 @@ class GeminiLive:
 
     async def handle_event(self, message):
         if 'error' in message:
-            # Avoid echoing arbitrary provider payloads (credentials/audio).
             raise RuntimeError('Gemini rejected request: code=' + str(message['error'].get('code')))
         if 'setupComplete' in message:
             self.connected_event.set()
@@ -286,7 +334,6 @@ class GeminiLive:
                 converted = self.resampler.convert(pcm)
                 if converted:
                     self._queue(converted)
-        # generationComplete isn't playback END; tool continuations may occur.
         if content.get('turnComplete'):
             if self.token is not None:
                 if not self.retired:
