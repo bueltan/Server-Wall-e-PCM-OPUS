@@ -11,7 +11,7 @@ Desde la raíz del backend, con las dependencias de `src/requirements.txt` insta
 ```bash
 export PIUU_VOICE_PROVIDER=gemini
 export GEMINI_MODEL=gemini-3.8-live
-export GEMINI_VOICE=Puck
+export GEMINI_VOICE=Leda
 read -rsp 'GEMINI_API_KEY: ' GEMINI_API_KEY; echo
 export GEMINI_API_KEY
 .venv/bin/python src/main.py
@@ -22,7 +22,7 @@ el repositorio ni se incluye en la URL WebSocket. El backend no carga archivos
 `.env` automáticamente. Para volver a xAI, usar `PIUU_VOICE_PROVIDER=xai` y la
 variable `XAI_API_KEY` habitual. No ejecutar dos servidores en el mismo puerto.
 
-La voz base predeterminada es Puck. `BridgeConfig.gemini_voice_style` agrega
+La voz base predeterminada es Leda. `BridgeConfig.gemini_voice_style` agrega
 instrucciones de interpretación: un pajarito bebé de dibujos animados, con voz
 aguda, dulce, brillante, alegre y juguetona, manteniendo claridad en español y
 sin gritar. Esto orienta la voz predefinida; no reproduce una voz diseñada.
@@ -30,7 +30,7 @@ El prompt de conversación y las instrucciones de ojos se conservan.
 
 No usar IDs `voice_...` ni `voices/...` en Gemini Live: el modo TTS personalizado
 queda pendiente. Si el servicio conserva un ID personalizado, reemplazarlo por
-`Environment="GEMINI_VOICE=Puck"` y reiniciar después de desplegar estos cambios.
+`Environment="GEMINI_VOICE=Leda"` y reiniciar después de desplegar estos cambios.
 
 Flujo implementado:
 

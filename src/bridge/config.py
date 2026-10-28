@@ -12,7 +12,7 @@ class BridgeConfig:
     voice_provider: str = field(default_factory=lambda: os.getenv("PIUU_VOICE_PROVIDER", "gemini").strip().lower())
     gemini_api_key: Optional[str] = field(default_factory=lambda: os.getenv("GEMINI_API_KEY"))
     gemini_model: str = field(default_factory=lambda: os.getenv("GEMINI_MODEL", "gemini-3.8-live"))
-    gemini_voice: str = field(default_factory=lambda: os.getenv("GEMINI_VOICE", "Puck"))
+    gemini_voice: str = field(default_factory=lambda: os.getenv("GEMINI_VOICE", "Leda"))
     gemini_prompt: Optional[str] = None  # Reuse the PIUU persona unless overridden.
     gemini_voice_style: str = (
         "Voice performance: You are a tiny, joyful baby bird character from an "

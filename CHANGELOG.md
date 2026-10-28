@@ -2,6 +2,8 @@
 
 ## 2026-10-27
 
+- Switch the default Gemini voice to Leda while retaining the PIUU delivery prompt.
+
 - Revert incompatible custom-voice changes and restore the Live handshake and 1–3 expression steps.
 - Add PIUU baby-bird delivery instructions over the prebuilt Puck voice.
 
