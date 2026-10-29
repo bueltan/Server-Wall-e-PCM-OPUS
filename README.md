@@ -1,5 +1,36 @@
 # PIUU CORE ↔ Gemini Live / xAI Voice bridge
 
+## Protección de audio al cancelar o cambiar de conexión (2026-10-29)
+
+Se revalidan tres puntos críticos después de esperas asíncronas:
+
+- **PCM hacia Gemini/xAI:** el envío conserva el WebSocket original y comprueba
+  que siga siendo el actual después de adquirir el bloqueo de escritura. xAI
+  también vuelve a comprobar que esté conectado. Un append pendiente no puede
+  enviarse usando el socket de una conexión posterior; falla sin reintentarse
+  automáticamente. En Gemini, el socket se invalida al comenzar el cierre,
+  antes de esperar la limpieza de MCP.
+- **Audio recibido:** los receivers de Gemini y xAI sólo procesan eventos y
+  limpian disponibilidad si su WebSocket sigue siendo el actual. Además, en
+  Gemini, si cambia el WebSocket mientras un evento espera
+  la barrera de historial/interrupción, ese evento no crea una respuesta ni
+  encola PCM o END en la conexión nueva. Un receiver anterior no puede interrumpir
+  la reproducción nueva con un evento de habla de la conexión anterior.
+- **Audio/END hacia CORE:** después de esperar la habilitación de salida, vaciar
+  PCM parcial o esperar el ritmo de envío, se comprueban tanto la identidad de
+  respuesta como el objeto de temporización del stream. Un reset invalida el
+  envío anterior, aunque la identidad siga siendo la misma; un END obsoleto no
+  marca como terminada la salida nueva. Los frames Opus ya tenían esta protección
+  después de su espera de ritmo; ahora también cubre la habilitación y END.
+
+La limpieza de conexiones y la cancelación siguen ejecutándose. Esta protección
+no puede retirar audio ya entregado al socket o a CORE, ni promete que una
+operación cuyo envío comenzó antes del cierre no haya llegado. No cambia formato,
+buffers ni plazos de audio y no agrega reintentos ni reconexión automática.
+Las pruebas offline fuerzan cierre/reemplazo durante las esperas, cancelación,
+eventos antiguos y resets con END pendiente, y verifican que el audio nuevo siga
+funcionando. La validación con proveedores y placa queda pendiente de despliegue.
+
 ## Sesión conservada mientras CORE espera (2026-10-29)
 
 El firmware CORE actualizado pausa el audio tras 20 segundos sin habla y mantiene

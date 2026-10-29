@@ -124,9 +124,15 @@ class TaggedXai(XaiRealtimeBridge):
                 await self.close();return False
 
     async def receive_events_forever(self):
-        async for raw in self.ws:
-            await self.handle_event(json.loads(raw))
-        self.ready_event.clear()
+        ws = self.ws
+        try:
+            async for raw in ws:
+                if ws is not self.ws:
+                    return
+                await self.handle_event(json.loads(raw))
+        finally:
+            if ws is self.ws:
+                self.ready_event.clear()
 
     async def handle_event(self, event):
         kind=event.get('type')

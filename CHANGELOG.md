@@ -2,6 +2,11 @@
 
 ## 2026-10-29
 
+- Revalidate the captured Gemini/xAI WebSocket after acquiring the send lock so queued audio cannot move to a replacement connection. Invalidate Gemini's socket at close entry before asynchronous MCP cleanup.
+- Discard Gemini audio/tool events whose connection changed while waiting for the response/history barrier; isolate Gemini/xAI receiver processing and readiness cleanup to their captured socket. Extend downlink stream/pacer checks across the output gate, final PCM flush and END pacing/repetition so stale END cannot finish a reset stream.
+- Add deterministic offline regressions that reproduce these races against the original code, cover cancellation and verify subsequent fresh audio/END delivery. Document the limited scope and in-flight-delivery limitation; no live provider calls or deployment performed.
+- Pass all 259 backend tests, including eight new audio lifecycle tests, Python syntax compilation and diff whitespace checks. Live provider/hardware validation remains pending deployment.
+
 - Add optional Device MCP over stdio with an independent ToolManager and a persistent authenticated loopback WebSocket gateway into the session-owned UDP transport. Keep device controls independent of slow Google tool calls and bind local connections to their opening conversation.
 - Add volume query/set/relative adjustment and shared mute/restore, optional explicit persistence, CAP_VOLUME_CONTROL=0x0040 and VOLUME/VOLUME_ACK=30/31. Confirm only CORE acknowledgements, deduplicate UDP retries and preserve unknown outcomes without replaying WebSocket mutations.
 - Interpret Spanish lower/higher-volume requests as −20/+20 percentage points when unspecified, including «hablá más despacio» as lower volume; an explicit amount replaces that step and a repeated reference in one request must produce one adjustment. Playback speed is unchanged.

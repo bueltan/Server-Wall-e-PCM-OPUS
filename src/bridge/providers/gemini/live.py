@@ -156,10 +156,13 @@ class GeminiLive:
         # connect() opens transport only; session waits for setupComplete.
 
     async def _send(self, payload):
-        if self.ws is None:
+        ws = self.ws
+        if ws is None:
             raise RuntimeError('Gemini websocket is not connected')
         async with self.send_lock:
-            await self.ws.send(json.dumps(payload))
+            if ws is not self.ws:
+                raise RuntimeError('Gemini websocket changed before send')
+            await ws.send(json.dumps(payload))
 
     async def send_notification(self, reminder):
         if not self.ready_event.is_set():
@@ -260,9 +263,12 @@ class GeminiLive:
 
     async def _ensure_response(self):
         if self.token is None:
+            ws = self.ws
             # The receiver must keep reading interruption/turnComplete first;
             # only a NEW response waits for CORE's interruption ACK barrier.
             await self.history_ready.wait()
+            if ws is None or ws is not self.ws:
+                return None
             self._speech_end()
             self._reset_turn()
             self.serial += 1
@@ -282,6 +288,8 @@ class GeminiLive:
         if self.retired:
             return
         token = await self._ensure_response()
+        if token is None:
+            return
         responses = []
         for call in calls:
             cid, name = call.get('id'), call.get('name')
@@ -343,6 +351,7 @@ class GeminiLive:
             self.output_pcm_queue.put_nowait((self.token, pcm))
 
     async def handle_event(self, message):
+        ws = self.ws
         if 'error' in message:
             # Avoid echoing arbitrary provider payloads (credentials/audio).
             raise RuntimeError('Gemini rejected request: code=' + str(message['error'].get('code')))
@@ -379,6 +388,8 @@ class GeminiLive:
                 event('GEMINI_' + tag, self.token, text=text)
         if 'toolCall' in message:
             await self._tools(message['toolCall'].get('functionCalls', []))
+            if ws is not self.ws:
+                return
         if not self.retired:
             for part in content.get('modelTurn', {}).get('parts', []):
                 inline = part.get('inlineData')
@@ -390,7 +401,8 @@ class GeminiLive:
                 pcm = base64.b64decode(inline['data'], validate=True)
                 if not pcm:
                     continue
-                await self._ensure_response()
+                if await self._ensure_response() is None:
+                    return
                 if not self.valid(self.token):
                     continue
                 if not self.audio_started:
@@ -417,14 +429,20 @@ class GeminiLive:
             self._reset_turn()
 
     async def receive_events_forever(self):
+        ws = self.ws
         try:
-            async for raw in self.ws:
+            async for raw in ws:
+                if ws is not self.ws:
+                    return
                 await self.handle_event(json.loads(raw))
         finally:
-            self.ready_event.clear()
-            self.connected_event.clear()
+            if ws is self.ws:
+                self.ready_event.clear()
+                self.connected_event.clear()
 
     async def close(self):
+        # Invalidate pending sends/receives before MCP cleanup can yield.
+        ws, self.ws = self.ws, None
         self.ready_event.clear()
         self.connected_event.clear()
         self.plan = None
@@ -435,7 +453,6 @@ class GeminiLive:
             await asyncio.gather(*tasks, return_exceptions=True)
         await self.tool_manager.close()
         await self.device_manager.close()
-        ws, self.ws = self.ws, None
         if ws is not None:
             try:
                 await asyncio.wait_for(ws.close(), 2)

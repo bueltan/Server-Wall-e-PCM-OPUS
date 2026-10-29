@@ -57,22 +57,23 @@ class AudioPipeline:
             token,chunk=await self.output_pcm_queue.get()
             if not self.output_valid(token):
                 self.counters["stale_output"]+=1;continue
+            pacer=self.output_pacer
             await self.output_gate.wait()
-            if not self.output_valid(token): continue
+            if not self.output_valid(token) or pacer is not self.output_pacer: continue
             if chunk is None:
                 await self._flush_tagged(token,True)
-                if not self.output_valid(token): continue
-                await self.output_pacer.wait()
-                if not self.output_valid(token): continue
+                if not self.output_valid(token) or pacer is not self.output_pacer: continue
+                await pacer.wait()
+                if not self.output_valid(token) or pacer is not self.output_pacer: continue
                 inner=self.opus_packet_format.pack_end_packet(self.output_sequence,self.output_pts_samples)
                 if hasattr(self,'downlink'):
                     self.downlink.finish(token,self.output_sequence,inner)
                 else:
                     for i in range(self.config.output_end_repeat_count):
-                        if not self.output_valid(token): break
+                        if not self.output_valid(token) or pacer is not self.output_pacer: break
                         self._send(Kind.OPUS,token,self.output_sequence,inner)
                         if i+1<self.config.output_end_repeat_count: await asyncio.sleep(self.config.output_end_repeat_interval)
-                if not self.output_valid(token): continue
+                if not self.output_valid(token) or pacer is not self.output_pacer: continue
                 self.output_active=False;self.output_finished=True;self.output_recorder.close()
                 self.expressions.reset('audio_send_finished')
                 event("OUTPUT_END",token,final_seq=self.output_sequence,pts=self.output_pts_samples)

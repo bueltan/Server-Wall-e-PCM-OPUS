@@ -38,10 +38,13 @@ class XaiRealtimeBridge:
         print("[XAI] connected")
 
     async def _safe_send(self, payload: dict) -> None:
-        if self.ws is None or not self.connected_event.is_set():
+        ws = self.ws
+        if ws is None or not self.connected_event.is_set():
             raise RuntimeError("xAI websocket is not connected")
         async with self.send_lock:
-            await self.ws.send(json.dumps(payload))
+            if ws is not self.ws or not self.connected_event.is_set():
+                raise RuntimeError("xAI websocket changed before send")
+            await ws.send(json.dumps(payload))
 
     def turn_detection(self):
         return None
