@@ -40,6 +40,9 @@ class BridgeConfig:
         "ayude a la conversación; no fuerces preguntas ni prolongues despedidas "
         "o confirmaciones. Adapta el tono al contexto sin exagerar emociones."
     )
+    gmail_mcp_enabled: bool = field(default_factory=lambda: os.getenv("PIUU_GMAIL_MCP_ENABLED", "0").lower() in ("1", "true", "yes"))
+    tool_timeout_sec: float = 15.0
+
     # Continuous v3 provider tool and optional capability-negotiated visual transport.
     expression_tools_enabled: bool = True
     expression_udp_enabled: bool = True

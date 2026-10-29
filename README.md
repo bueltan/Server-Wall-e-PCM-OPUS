@@ -1,4 +1,32 @@
-# PIUU CORE ↔ xAI Voice bridge
+# PIUU CORE ↔ Gemini Live / xAI Voice bridge
+
+## Entorno Python y dependencias
+
+Ejecutar estos comandos desde `PIUU_SERVER`. El entorno virtual se llama `.venv`;
+el punto inicial hace que sea una carpeta oculta en muchos exploradores. Se
+verificó con Python 3.12. Para preparar una instalación nueva:
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install -r src/requirements-mcp.txt
+python -m pip check
+```
+
+`src/requirements-mcp.txt` incluye los requirements base y las dependencias de
+MCP y OAuth de Gmail. Para usar solo el bridge de voz, instalar en su lugar
+`src/requirements.txt`. Si `.venv` ya existe, basta con activarlo e instalar los
+requirements; no hace falta recrearlo.
+
+Para iniciar el backend con las variables del proveedor configuradas:
+
+```bash
+source .venv/bin/activate
+python src/main.py
+```
+
+También se puede ejecutar `.venv/bin/python src/main.py` sin activar el entorno.
+La instalación local de dependencias y sus imports se verificaron sin conflictos.
 
 ## Reconexión de CORE por MAC (2026-10-28)
 
@@ -38,8 +66,11 @@ PYTHONPATH=src .venv/bin/python -m unittest discover -s tests
 ```
 
 No se desplegó el backend ni se cargó firmware durante este chat. Falta validar
-los cambios en el VPS y el hardware. El bloqueo de lectura UDP identificado en
-CORE sigue pendiente; recuperar identidad/dirección no corrige ese fallo.
+los cambios en el VPS y el hardware. CORE corrige además el bloqueo de lectura
+UDP tras un fallo temporal del mutex: reintenta el datagrama pendiente y descarta
+enteros los datagramas sobredimensionados o leídos parcialmente. Es una corrección
+local, sin cambios adicionales al backend ni al protocolo; falta probarla con los
+microcortes WiFi reales.
 
 ## Gemini Live (UDP v3)
 
@@ -688,3 +719,41 @@ ordering with the current xAI model and exercise interruptions around tool calls
 References checked 2026-10-26:
 - https://docs.x.ai/developers/model-capabilities/audio/speech-to-speech
 - https://docs.x.ai/developers/rest-api-reference/inference/voice
+
+## Gmail MCP propio (2026-10-29)
+
+Integración opcional **PIUU → Gemini Live → Tool Manager → Gmail MCP → Gmail API**.
+El servidor MCP propio corre en un subproceso por stdio. El Tool Manager descubre
+las herramientas y las expone a Gemini con el prefijo `gmail_`:
+
+- `gmail_search_messages`: búsqueda con sintaxis Gmail, metadatos y paginación.
+- `gmail_read_message`: lectura del cuerpo de texto plano y metadatos.
+- `gmail_send_message(to, subject, body)`: envío de texto plano a una dirección.
+
+Las herramientas Gmail usan `NON_BLOCKING` y resultados `WHEN_IDLE`; las consultas
+pendientes sobreviven al cierre de un turno de audio. La herramienta de
+expresiones conserva `BLOCKING`. Los envíos no se reintentan automáticamente:
+un timeout puede dejar el resultado incierto y debe revisarse Enviados antes
+de solicitar otro envío.
+
+Tras instalar `src/requirements-mcp.txt`, habilitar Gmail API en Google Cloud y
+guardar las credenciales OAuth de tipo Desktop app en `.secrets/gmail-client.json`:
+
+```bash
+PYTHONPATH=src .venv/bin/python -m bridge.mcp_servers.gmail --auth
+export PIUU_VOICE_PROVIDER=gemini
+export PIUU_GMAIL_MCP_ENABLED=1
+.venv/bin/python src/main.py
+```
+
+El inicio requiere también `GEMINI_API_KEY`, como se describe en la sección de
+Gemini Live. OAuth solicita `gmail.readonly` y `gmail.send`. Si había un token de
+solo lectura, volver a ejecutar `--auth` para conceder el permiso de envío.
+Gmail permanece desactivado por defecto; Calendar y Home MCP quedan pendientes.
+
+Validación: **173 pruebas backend pasaron**, incluidos intercambios MCP reales por
+stdio y pruebas de envío con API simulada. No se enviaron correos reales; falta
+configurar las credenciales, autorizar la cuenta y probar Gmail en vivo.
+
+Instalación, autorización, límites y ejemplo de envío por voz en
+[GMAIL_MCP.md](GMAIL_MCP.md).

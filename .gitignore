@@ -2,3 +2,7 @@ __pycache__/
 *.pyc
 .venv/
 recordings/
+.secrets/
+.env
+credentials.json
+token.json

@@ -170,5 +170,7 @@ Los clientes anteriores, con HELLO sin MAC, conservan el handshake restringido
 al origen original. No pueden reemplazar un dispositivo ya asociado por MAC.
 Actualizar primero PIUU_SERVER y después CORE. Diagnóstico: `CORE_ADMITTED`
 identifica la primera admisión; `CORE_REBOUND` registra MAC y direcciones anterior
-y nueva. Esta recuperación del transporte es independiente del bloqueo de lectura
-UDP de CORE, que requiere una corrección separada.
+y nueva. La recepción de CORE reintenta el datagrama pendiente si falla el mutex
+entre parse y read; descarta enteros los datagramas sobredimensionados o leídos
+parcialmente. Esa corrección local no modifica el contrato UDP ni agrega buffers;
+su validación durante microcortes WiFi reales sigue pendiente.

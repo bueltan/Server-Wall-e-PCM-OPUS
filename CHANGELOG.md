@@ -1,5 +1,15 @@
 # Changelog
 
+## 2026-10-29
+
+- Add a PIUU-owned Gmail MCP server over stdio and a provider-independent Tool Manager with tool discovery, prefixed routing, bounded queues and call timeouts.
+- Integrate Gmail search, message reading and plain-text email sending into Gemini Live using explicit NON_BLOCKING declarations and WHEN_IDLE results; keep expression preparation BLOCKING.
+- Preserve pending calls across audio turns, handle tool cancellation and deduplicate call IDs; retain cancelled-send markers and disable automatic send retries to avoid duplicate messages after uncertain outcomes.
+- Add Google OAuth desktop authorization with gmail.readonly and gmail.send scopes, automatic token refresh, private token files and detection of old read-only tokens requiring new consent.
+- Add optional src/requirements-mcp.txt dependencies; verify the existing Python 3.12 .venv, package consistency and project imports.
+- Document environment setup, Gmail activation, OAuth reauthorization and manual send testing in README.md and GMAIL_MCP.md. Calendar and Home MCP servers remain pending.
+- Pass all 173 backend tests, including real local MCP stdio exchanges, MIME encoding, send validation, OAuth scope migration and cancellation regressions. No real email was sent; account authorization and live Gmail validation remain pending.
+
 ## 2026-10-28
 
 - Bind CORE by its declared WiFi station MAC (`CAP_DEVICE_MAC=0x0008`, six-byte HELLO body) and confirm the extension in HELLO_ACK.
