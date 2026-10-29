@@ -830,3 +830,31 @@ autorización y prueba con hardware; no se crearon eventos reales en esta implem
 
 Validación de Calendar y avisos: **197 pruebas backend**, tests host de CORE e
 interoperabilidad Python/C++ pasaron; firmware `cyd-uart0` compilado correctamente.
+
+## Diagnósticos MCP (2026-10-29)
+
+Gmail, Contactos y Calendar devuelven códigos seguros para errores de validación,
+autorización y API. El Tool Manager comprueba el esquema antes de llamar al servidor
+y marca `ok=False` también cuando el transporte MCP funcionó pero la operación
+devolvió `status=failed`, `status=unknown` o un error. Se conserva `data` en la respuesta.
+Instalar las dependencias actualizadas de `src/requirements-mcp.txt`.
+
+Con `PIUU_LOG_LEVEL=INFO`, buscar `MCP_TOOL_STARTED` y `MCP_TOOL_FINISHED`:
+`call_id` permite unir inicio y fin dentro de cada Tool Manager; las llamadas de voz
+incluyen además cliente, sesión, turno y respuesta. Se registran `queue_ms`,
+`duration_ms`, `error`, `error_kind`, `status`, `http_status`, `exception_type` y `retry_safe` cuando
+corresponden. Los rechazos previos a ejecución tienen sólo `MCP_TOOL_FINISHED`.
+`MCP_SERVER_ERROR` distingue fallos de dependencias, conexión, inicialización,
+descubrimiento, worker y timeout de arranque.
+
+`invalid_tool_arguments` incluye hasta cinco campos/reglas de esquema sin valores.
+`timestamp_requires_rfc3339_offset`, `invalid_event_datetime`, `invalid_time_zone`,
+`offset_does_not_match_time_zone` e `invalid_event_id` permiten distinguir rechazos
+de creación antes de acceder a Google. No se imprimen argumentos, cuerpos de correo,
+eventos, tokens, rutas OAuth ni texto de excepciones en estos diagnósticos.
+Los errores de servidores MCP externos conservan el código genérico
+`mcp_tool_error` si no ofrecen un diagnóstico seguro conocido.
+
+Un timeout o `status=unknown` no confirma que una escritura haya fallado: revisar
+Enviados, el contacto o el `event_id` antes de pedir otro intento. Esta mejora no
+reconstruye los detalles descartados por logs anteriores ni despliega el backend.

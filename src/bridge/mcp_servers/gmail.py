@@ -2,7 +2,6 @@
 import argparse
 import base64
 import os
-import json
 import re
 import time
 import threading
@@ -10,6 +9,7 @@ from email.headerregistry import Address
 from email.message import EmailMessage
 from pathlib import Path
 from bridge.mcp_servers.google_oauth import save_token, load_credentials, build_service, authorize
+from bridge.mcp_servers.diagnostics import diagnostic_tool, failure_details, google_reason, http_status
 
 GMAIL_SCOPES = ['https://www.googleapis.com/auth/gmail.readonly',
                 'https://www.googleapis.com/auth/gmail.send']
@@ -62,21 +62,18 @@ def contact_summary(person):
 
 def contacts_failure(exc, write=False):
     if isinstance(exc, RuntimeError) and str(exc).startswith('gmail_auth_required'):
-        return {'status': 'failed', 'error': 'contacts_write_auth_required' if write else 'contacts_auth_required'}
-    status = getattr(getattr(exc, 'resp', None), 'status', None)
-    reasons = ''
-    try:
-        error = json.loads(exc.content).get('error', {})
-        reasons = ' '.join(str(item.get('reason', '')) for item in
-                           error.get('errors', []) + error.get('details', []))
-    except (AttributeError, ValueError, TypeError):
-        pass
-    if 'accessNotConfigured' in reasons or 'SERVICE_DISABLED' in reasons:
+        return {'status': 'failed', 'error': 'contacts_write_auth_required' if write else 'contacts_auth_required',
+                'error_kind': 'auth'}
+    status = http_status(exc)
+    reason = google_reason(exc)
+    if reason == 'api_disabled':
         code = 'people_api_disabled'
+    elif reason == 'rate_limited':
+        code = 'contacts_rate_limited'
     else:
         code = {400: 'invalid_contact_data', 401: 'contacts_auth_required', 403: 'contacts_access_denied',
                 404: 'contact_not_found', 429: 'contacts_rate_limited'}.get(status, 'contacts_unavailable')
-    return {'status': 'failed', 'error': code}
+    return {'status': 'failed', 'error': code, **failure_details(exc)}
 
 
 def summary(message):
@@ -226,10 +223,11 @@ class GmailMailbox:
                 person = api.people().createContact(body=body, personFields=CONTACT_FIELDS,
                     sources=['READ_SOURCE_TYPE_CONTACT']).execute(num_retries=0)
             except Exception as exc:
-                status = getattr(getattr(exc, 'resp', None), 'status', None)
+                status = http_status(exc)
                 if isinstance(status, int) and 400 <= status < 500:
                     return {**contacts_failure(exc, write=True), 'retry_safe': False}
-                return {'status': 'unknown', 'error': 'contact_create_not_confirmed', 'retry_safe': False}
+                return {'status': 'unknown', 'error': 'contact_create_not_confirmed',
+                        'retry_safe': False, **failure_details(exc)}
         return {'status': 'created', 'contact': contact_summary(person)}
 
     def send_message(self, to: str, subject: str, body: str) -> dict:
@@ -256,14 +254,22 @@ class GmailMailbox:
         message['Subject'] = subject
         message.set_content(body)
         raw = base64.urlsafe_b64encode(message.as_bytes()).decode('ascii')
+        api = self.service_factory()  # No write was attempted if authorization fails.
         try:
-            result = self.service_factory().users().messages().send(
+            result = api.users().messages().send(
                 userId='me', body={'raw': raw}).execute(num_retries=0)
-        except Exception:
+        except Exception as exc:
             # Do not expose API exception payloads (which may contain email data).
             # A transport failure cannot prove whether Gmail accepted the send.
+            status = http_status(exc)
+            if status is not None and 400 <= status < 500:
+                reason = google_reason(exc)
+                code = ('gmail_' + reason) if reason else {400: 'gmail_invalid_request', 401: 'gmail_auth_required',
+                        403: 'gmail_access_denied', 404: 'gmail_not_found',
+                        429: 'gmail_rate_limited'}.get(status, 'gmail_api_error')
+                return {'status': 'failed', 'error': code, 'retry_safe': False, **failure_details(exc)}
             return {'status': 'unknown', 'error': 'send_not_confirmed',
-                    'retry_safe': False}
+                    'retry_safe': False, **failure_details(exc)}
         return {'status': 'sent', 'id': result['id'], 'thread_id': result.get('threadId')}
 
 
@@ -274,10 +280,10 @@ def create_server(mailbox=None):
     mailbox = mailbox or GmailMailbox()
     for function in (mailbox.search_messages, mailbox.read_message, mailbox.search_contacts, mailbox.get_contact):
         server.tool(annotations=ToolAnnotations(readOnlyHint=True, destructiveHint=False,
-                    idempotentHint=True, openWorldHint=True))(function)
+                    idempotentHint=True, openWorldHint=True))(diagnostic_tool(function, 'gmail'))
     for function in (mailbox.send_message, mailbox.create_contact):
         server.tool(annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False,
-                    idempotentHint=False, openWorldHint=True))(function)
+                    idempotentHint=False, openWorldHint=True))(diagnostic_tool(function, 'gmail'))
     return server
 
 

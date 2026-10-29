@@ -221,7 +221,8 @@ class MailboxTests(unittest.TestCase):
         create.return_value.execute.side_effect = TimeoutError('private contact data')
         mailbox = GmailMailbox(contacts_write_service_factory=lambda: service)
         result = mailbox.create_contact('Ana', email='ana@example.com')
-        self.assertEqual(result, {'status': 'unknown', 'error': 'contact_create_not_confirmed', 'retry_safe': False})
+        self.assertEqual(result, {'status': 'unknown', 'error': 'contact_create_not_confirmed',
+                                  'retry_safe': False, 'error_kind': 'exception', 'exception_type': 'TimeoutError'})
         create.assert_called_once()
         self.assertNotIn('private', str(result))
 
@@ -367,8 +368,9 @@ class MCPIntegrationTests(unittest.IsolatedAsyncioTestCase):
                 contact_result = await manager.call('gmail_get_contact', {'resource_name': 'people/c123'})
                 self.assertEqual(contact_result['data']['error'], 'contacts_auth_required')
                 result = await manager.call('gmail_read_message', {'message_id': 'abc'})
-                self.assertEqual(result, {'ok': False, 'error': 'mcp_tool_error'})
-                self.assertEqual((await manager.call('gmail_read_message', {}))['error'], 'mcp_tool_error')
+                self.assertFalse(result['ok'])
+                self.assertEqual(result['error'], 'gmail_auth_required')
+                self.assertEqual((await manager.call('gmail_read_message', {}))['error'], 'invalid_tool_arguments')
                 self.assertEqual((await manager.call('gmail_read_message', 'invalid'))['error'], 'invalid_tool_arguments')
             finally:
                 await manager.close()

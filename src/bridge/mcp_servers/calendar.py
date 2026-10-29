@@ -1,6 +1,5 @@
 """Google Calendar MCP: calendars, events, availability and event creation."""
 import argparse
-import json
 import os
 import re
 import uuid
@@ -8,6 +7,7 @@ from datetime import date, datetime
 from pathlib import Path
 from zoneinfo import ZoneInfo
 from bridge.mcp_servers.google_oauth import load_credentials, build_service, authorize
+from bridge.mcp_servers.diagnostics import diagnostic_tool, failure_details, google_reason, http_status
 
 ROOT = Path(__file__).resolve().parents[3]
 SCOPES = ['https://www.googleapis.com/auth/calendar.events',
@@ -33,7 +33,10 @@ def identifier(value):
 def timestamp(value):
     if not re.fullmatch(r'\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})', value):
         raise ValueError('timestamp_requires_rfc3339_offset')
-    result = datetime.fromisoformat(value.replace('Z', '+00:00'))
+    try:
+        result = datetime.fromisoformat(value.replace('Z', '+00:00'))
+    except ValueError as exc:
+        raise ValueError('invalid_event_datetime') from exc
     if result.utcoffset() is None:
         raise ValueError('timestamp_requires_rfc3339_offset')
     return result
@@ -54,29 +57,21 @@ def event_summary(item):
 def api_failure(exc, uncertain=False):
     """Return only fixed diagnostic codes; never echo remote exception payloads."""
     if isinstance(exc, RuntimeError) and str(exc).startswith('calendar_auth_required'):
-        return {'status': 'failed', 'error': 'calendar_auth_required', 'retry_safe': False}
-    status = getattr(getattr(exc, 'resp', None), 'status', None)
+        return {'status': 'failed', 'error': 'calendar_auth_required', 'retry_safe': False, 'error_kind': 'auth'}
+    status = http_status(exc)
     if status is not None:
-        reason = ''
-        try:
-            error = json.loads(exc.content).get('error', {})
-            reason = ' '.join(str(x.get('reason', '')) for x in
-                              error.get('errors', []) + error.get('details', []))
-        except (ValueError, AttributeError, TypeError):
-            pass
-        if any(r in reason for r in ('rateLimitExceeded', 'userRateLimitExceeded', 'quotaExceeded')):
-            code = 'calendar_rate_limited'
-        elif 'accessNotConfigured' in reason or 'SERVICE_DISABLED' in reason:
-            code = 'calendar_api_disabled'
+        reason = google_reason(exc)
+        if reason:
+            code = 'calendar_' + reason
         else:
             code = {400: 'invalid_calendar_request', 401: 'calendar_auth_required',
                     403: 'calendar_access_denied', 404: 'calendar_not_found',
                     409: 'event_id_conflict', 429: 'calendar_rate_limited'}.get(status, 'calendar_api_error')
         if status < 500:
-            return {'status': 'failed', 'error': code, 'retry_safe': False}
+            return {'status': 'failed', 'error': code, 'retry_safe': False, **failure_details(exc)}
     return {'status': 'unknown' if uncertain else 'failed',
             'error': 'calendar_write_not_confirmed' if uncertain else 'calendar_unavailable',
-            'retry_safe': False}
+            'retry_safe': False, **failure_details(exc)}
 
 
 class CalendarAgenda:
@@ -180,7 +175,11 @@ class CalendarAgenda:
         if all_day:
             if not all(re.fullmatch(r'\d{4}-\d{2}-\d{2}', v) for v in (start, end)):
                 raise ValueError('all_day_requires_dates')
-            if date.fromisoformat(end) <= date.fromisoformat(start):
+            try:
+                first, last = date.fromisoformat(start), date.fromisoformat(end)
+            except ValueError as exc:
+                raise ValueError('invalid_event_datetime') from exc
+            if last <= first:
                 raise ValueError('end_must_follow_start')
             bounds = ({'date': start}, {'date': end})
         else:
@@ -209,9 +208,9 @@ def create_server(agenda=None):
     agenda = agenda or CalendarAgenda()
     for function in (agenda.list_calendars, agenda.list_events, agenda.get_event, agenda.check_availability):
         server.tool(annotations=ToolAnnotations(readOnlyHint=True, destructiveHint=False,
-                    idempotentHint=True, openWorldHint=True))(function)
+                    idempotentHint=True, openWorldHint=True))(diagnostic_tool(function, 'calendar'))
     server.tool(annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False,
-                idempotentHint=False, openWorldHint=True))(agenda.create_event)
+                idempotentHint=False, openWorldHint=True))(diagnostic_tool(agenda.create_event, 'calendar'))
     return server
 
 

@@ -1,5 +1,6 @@
 -r requirements.txt
 # v1 client/stdio and FastMCP APIs; avoid the incompatible v2 major version.
 mcp>=1.28,<2
+jsonschema>=4.20,<5
 google-api-python-client>=2.150,<3
 google-auth-oauthlib>=1.2,<2

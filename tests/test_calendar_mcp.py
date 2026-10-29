@@ -197,7 +197,7 @@ class CalendarMCPIntegrationTests(unittest.IsolatedAsyncioTestCase):
                 result = await manager.call('calendar_list_events', {})
                 self.assertEqual(result['data']['status'], 'failed')
                 # Calendar cannot borrow an existing Gmail token or open a browser.
-                self.assertEqual((await manager.call('gmail_read_message', {'message_id': 'abc'}))['error'], 'mcp_tool_error')
+                self.assertEqual((await manager.call('gmail_read_message', {'message_id': 'abc'}))['error'], 'gmail_auth_required')
             finally:
                 await manager.close()
             self.assertFalse(manager.routes)

@@ -1,5 +1,13 @@
 # Gmail MCP de PIUU
 
+Los [diagnósticos MCP](README.md#diagnósticos-mcp-2026-10-29) distinguen validación,
+autorización, API, timeout y transporte sin registrar contenido ni credenciales.
+También se aplican a las herramientas de Contactos. Los fallos de dominio devuelven
+`ok=False` y conservan el detalle seguro en `data`; `http_status` se registra cuando
+Google devuelve un estado HTTP. Un rechazo HTTP 4xx al enviar correo devuelve
+`status=failed`; un fallo de transporte o 5xx conserva `status=unknown` y
+`send_not_confirmed`, sin reintentos automáticos.
+
 Para autorizar Gmail, Contactos, Calendar, Tasks y archivos de Drive juntos,
 seguir [GOOGLE_AUTH.md](GOOGLE_AUTH.md). Permite usar un único token en Gmail y
 Calendar; los pasos individuales de esta guía siguen disponibles como alternativa.

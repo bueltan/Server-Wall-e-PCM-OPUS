@@ -209,6 +209,14 @@ eventos reales ni se envían correos desde los tests.
 
 Los logs `MCP_SERVER_READY`, `MCP_TOOL_STARTED` y `MCP_TOOL_FINISHED` identifican
 servidor, herramienta y estado sin imprimir argumentos, cuerpos ni tokens.
+Inicio/fin comparten `call_id` dentro del Tool Manager; las llamadas de voz incluyen
+la identidad de sesión/turno/respuesta. Fin añade duración, categoría del error,
+estado HTTP y seguridad de reintento cuando están disponibles. `ok=False` incluye
+fallos de dominio aunque MCP haya respondido correctamente.
+Los rechazos de validación devuelven códigos como `invalid_event_id`,
+`invalid_event_datetime` y `offset_does_not_match_time_zone`; los errores de esquema
+devuelven `invalid_tool_arguments` y campos/reglas sin sus valores. Ver
+[diagnósticos MCP](README.md#diagnósticos-mcp-2026-10-29).
 `CALENDAR_REMINDERS_SYNCED` informa la actualización de la agenda.
 `calendar_api_disabled` requiere habilitar Calendar API; `calendar_auth_required`
 requiere autorizar el token. `calendar_access_denied` exige revisar el permiso

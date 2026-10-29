@@ -204,7 +204,7 @@ class GeminiLive:
 
     async def _mcp_call(self, cid, name, args, token):
         try:
-            result = await self.tool_manager.call(name, args)
+            result = await self.tool_manager.call(name, args, token)
             if self.pending_tools.get(cid) is not asyncio.current_task():
                 return
             response = {'id': cid, 'name': name,
@@ -216,7 +216,7 @@ class GeminiLive:
         except asyncio.CancelledError:
             raise
         except Exception:
-            event('GEMINI_TOOL_RESPONSE_ERROR', token)
+            event('GEMINI_TOOL_RESPONSE_ERROR', token, tool=name, error='tool_response_unavailable')
         finally:
             # An old cancellation must not remove a new turn's reused call ID.
             if self.pending_tools.get(cid) is asyncio.current_task():

@@ -2,6 +2,12 @@
 
 ## 2026-10-29
 
+- Preserve fixed validation/auth/API diagnostic codes across all Gmail, Contacts and Calendar MCP tools instead of discarding domain exceptions as mcp_tool_error. Add safe HTTP metadata and distinguish rejected Gmail sends from uncertain writes without enabling retries.
+- Validate discovered MCP input schemas before dispatch; report bounded field/rule diagnostics without argument values. Mark domain failures and unknown write outcomes ok=False while retaining data.
+- Correlate tool lifecycle logs by call ID and voice-session identity; record queue/execution timing, startup phases, rejection, cancellation and transport/timeout failures. Keep raw exceptions, remote error text, OAuth paths and private payloads out of these diagnostics.
+- Document the diagnostic contract and add offline regression coverage with real local MCP stdio exchanges. Historical logs cannot recover discarded error details; deployment and live Calendar reproduction remain pending.
+- Pass all 226 backend tests, Python syntax compilation, dependency consistency and diff whitespace checks; no real Google messages, contacts or events were created by validation.
+
 - Enable Gemini sliding-window context compression for conversations retained while CORE microphone input is in standby; preserve existing error/GoAway closure handling without claiming transparent session resumption.
 - Pass all 216 backend tests, including 30 simulated minutes of valid CORE heartbeats without PCM, no manufactured provider input, and same-turn audio resumption without reopening the provider. Document CORE's 20-second microphone standby, 15-minute idle closure and provider/Calendar notification limitations. Deployment and live validation remain pending.
 
