@@ -14,8 +14,9 @@ con ventana deslizante para limitar el historial de Gemini; puede descartar deta
 antiguos. La sesión WebSocket sigue sujeta a los límites de Google: `GoAway`, un
 error del proveedor o un timeout definitivo cierran la conversación y la siguiente
 activación abre una nueva. La reanudación transparente de Gemini no está implementada.
-Los avisos proactivos de Calendar todavía requieren una conversación libre, por
-lo que una conversación en Standby continúa aplazándolos.
+Los avisos proactivos de Calendar pueden usar esa conversación en Standby con
+`CAP_STANDBY_NOTIFICATIONS=0x0020` negociada y admisión explícita de CORE. Se
+aplazan mientras hay habla, respuesta, reproducción o herramientas pendientes.
 
 Validación: 216 pruebas backend offline aprobadas, incluida media hora simulada
 sin PCM con heartbeats y reanudación del mismo turno sin reconectar el proveedor.
@@ -821,7 +822,13 @@ antes. Se aplica espera progresiva ante fallos y se persisten marcas para no rep
 intentos después de reiniciar. CORE ocupado difiere el aviso hasta antes del inicio
 del evento. La extensión negociada `CAP_NOTIFICATIONS=0x0010`, `NOTICE=28` y START
 correlacionado abre la sesión de Gemini sin wake del usuario; requiere firmware CORE
-nuevo. La consulta de Calendar por voz no requiere esta extensión.
+nuevo. Con `CAP_STANDBY_NOTIFICATIONS=0x0020`, una sesión conservada también puede
+recibir el aviso: CORE confirma Standby mediante `NOTICE_ACK=29` antes de enviar
+texto a Gemini. Se conservan proveedor, turno y entrada PCM; después de reproducir
+CORE retoma la escucha con guarda de eco. La consulta Calendar por voz no requiere
+esta extensión. Actualizar servidor antes de CORE; firmware anterior conserva
+avisos desde Idle. Sin ACK de Standby no se envía texto ni se marca un intento;
+un envío incierto ya marcado no se reintenta automáticamente.
 
 Instrucciones de autorización en la PC, copia al VPS, entorno Python real de
 `walle.service`, variables, límites y futura migración a webhooks en

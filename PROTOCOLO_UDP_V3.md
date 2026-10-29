@@ -201,3 +201,26 @@ La persistencia y planificación corresponden al backend; no se promete exactame
 una reproducción ante reinicios o fallos de red. Las marcas persistidas registran
 un intento antes de enviar el texto a Gemini. Actualizar backend y firmware CORE
 para usar la capacidad. Ver CALENDAR_MCP.md en PIUU_SERVER para la configuración.
+
+### Avisos dentro de una sesión en Standby
+
+Capacidad opcional `CAP_STANDBY_NOTIFICATIONS=0x0020`, ofrecida/aceptada junto a
+`CAP_NOTIFICATIONS` y fija por client nonce. Actualizar servidor primero: el
+anterior rechaza bits HELLO desconocidos; el nuevo conserva avisos Idle de CORE viejo.
+
+`NOTICE=28` con identidad `(client, server, turn_actual, 0)`, flags=0 y cuerpo
+vacío ofrece un aviso en la sesión existente. `NOTICE_ACK=29` devuelve identidad
+y sequence exactas, cuerpo vacío y flags=1 si CORE reservó Standby, 0 si está
+ocupado. CORE ignora sesiones/turnos extraños, secuencias antiguas y ofertas sin
+capacidad. Una oferta aceptada duplicada sólo repite el ACK.
+
+CORE admite únicamente Listening con entrada en Standby, sin habla, playback,
+guarda de eco ni reserva pendiente. El backend espera mientras hay respuesta,
+herramientas o reparación de historial; revalida estado e intervención de voz
+después del ACK y antes de marcar el intento duradero. Reintenta NOTICE cada
+250 ms por hasta dos segundos; sin ACK conserva el turno y no envía texto.
+La entrega usa Gemini ya conectado, sin START, READY, CANCEL ni reinicio PCM.
+ResponseStarted y playback usan el flujo habitual. Después de playback/guarda
+de eco CORE reactiva la entrada. Sin respuesta inicial durante 20 segundos, la
+reserva vuelve a Standby sin cerrar la sesión; un envío incierto ya persistido
+mantiene la política de no repetición.

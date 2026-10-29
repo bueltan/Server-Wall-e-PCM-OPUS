@@ -2,6 +2,11 @@
 
 ## 2026-10-29
 
+- Deliver Calendar reminders through the existing Gemini connection when CORE explicitly admits a preserved standby turn. Negotiate CAP_STANDBY_NOTIFICATIONS=0x0020 and NOTICE_ACK=29; keep existing idle START/READY delivery for older CORE firmware.
+- Revalidate session/utterance, provider readiness, response/tool/history/input activity and reminder eligibility after CORE admission. Preserve durable claim-before-send deduplication, defer busy sessions and keep the conversation open after a lost admission ACK.
+- Add offline coverage for standby reuse, manual activation/busy rejection, stale/malformed ACKs, state changes, expired events, lost ACKs, optional negotiation and uncertain-send deduplication; document server-first deployment and pending live reproduction.
+- Pass all 234 backend tests and Python syntax checks; the paired CORE host suite, Python/C++ notification interoperability and cyd-uart0 build passed. No deployment or real Calendar writes were performed for validation.
+
 - Preserve fixed validation/auth/API diagnostic codes across all Gmail, Contacts and Calendar MCP tools instead of discarding domain exceptions as mcp_tool_error. Add safe HTTP metadata and distinguish rejected Gmail sends from uncertain writes without enabling retries.
 - Validate discovered MCP input schemas before dispatch; report bounded field/rule diagnostics without argument values. Mark domain failures and unknown write outcomes ok=False while retaining data.
 - Correlate tool lifecycle logs by call ID and voice-session identity; record queue/execution timing, startup phases, rejection, cancellation and transport/timeout failures. Keep raw exceptions, remote error text, OAuth paths and private payloads out of these diagnostics.

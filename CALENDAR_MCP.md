@@ -168,8 +168,27 @@ recordatorio como texto. Gemini produce el audio para la salida Opus normal.
 CORE mantiene el micrófono silenciado al abrir el aviso; después de reproducirlo
 retoma la escucha con la protección de eco habitual. Si no llega una respuesta en
 20 segundos, CORE aborta la apertura del aviso. No se interrumpe una conversación
-activa. Los avisos esperan mientras CORE esté ocupado o desconectado, hasta la
+activa fuera de Standby. Los avisos esperan mientras CORE esté ocupado o desconectado, hasta la
 hora de inicio del evento; después se omiten.
+
+Con `CAP_STANDBY_NOTIFICATIONS=0x0020` negociada, `NOTICE` puede llevar el turno
+actual. CORE confirma su Standby con `NOTICE_ACK=29`, flags=1 para aceptar o 0
+para diferir; mantiene el micrófono pausado hasta terminar el aviso. No se infiere
+Standby por falta de PCM. El backend reintenta la oferta cada 250 ms durante hasta
+dos segundos. Sin ACK no marca el intento ni cierra la conversación.
+
+Después del ACK se revalidan sesión, intervención de voz, respuesta, herramientas
+pendientes y vigencia del evento. Se persiste el intento antes de enviar el texto
+a Gemini ya conectado, conservando historial y turno sin START/CANCEL ni reinicio
+PCM. CORE reactiva EARS después de playback y guarda de eco. Sin respuesta inicial
+en 20 segundos libera la reserva conservando Standby. Una respuesta tardía de una
+herramienta sin admisión de aviso no reactiva el micrófono.
+
+`NOTICE_STANDBY_ACCEPTED` y `NOTICE_SUBMITTED mode='standby'` identifican la ruta;
+`NOTICE_DEFERRED` registra cambios de motivo de espera sin repetirlos cada segundo.
+Actualizar primero el backend y después CORE: el servidor anterior rechaza el
+nuevo bit HELLO. CORE anterior conserva los avisos desde Idle. La política de
+deduplicación de envíos inciertos se mantiene.
 
 La marca de deduplicación se guarda **antes de enviar el texto a Gemini**. Se
 prioriza no repetir avisos ante reinicios o resultados inciertos: una marca prueba

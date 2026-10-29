@@ -7,8 +7,8 @@ import time
 from zoneinfo import ZoneInfo
 from bridge.audio.pipeline import AudioPipeline
 from bridge.transport.downlink_recovery import DownlinkRecovery
-from bridge.conversation.state import Conversation
-from bridge.transport.protocols.conversation import Identity, Packet, Kind, Event, encode, decode, CAP_EYES_PLAN, CAP_DEVICE_MAC, CAP_NOTIFICATIONS
+from bridge.conversation.state import Conversation, Phase
+from bridge.transport.protocols.conversation import Identity, Packet, Kind, Event, encode, decode, CAP_EYES_PLAN, CAP_DEVICE_MAC, CAP_NOTIFICATIONS, CAP_STANDBY_NOTIFICATIONS
 from bridge.expressions.delivery import EyePlanDelivery
 from bridge.transport.reliable_events import ReliableEvents
 from bridge.providers import create_provider
@@ -56,6 +56,9 @@ class ContinuousSession(AudioPipeline):
         self.notification_offer = None
         self.pending_notice = None
         self.next_notice = 0
+        self.standby_notifications_capable = False
+        self.standby_notification_offer = None
+        self.notice_deferred_reason = None
 
     def new_input(self):
         self.provider_input=ProviderInput(self.config,self._accept_audio,self.xai.wait_input_ready)
@@ -94,7 +97,8 @@ class ContinuousSession(AudioPipeline):
     def datagram_received(self, data, addr):
         try: p = decode(data)
         except (ValueError, struct.error): self.counters['invalid'] += 1; return
-        allowed_flags = CAP_EYES_PLAN | CAP_DEVICE_MAC | CAP_NOTIFICATIONS if p.kind == Kind.HELLO else 0
+        allowed_flags = (CAP_EYES_PLAN | CAP_DEVICE_MAC | CAP_NOTIFICATIONS | CAP_STANDBY_NOTIFICATIONS
+                         if p.kind == Kind.HELLO else (1 if p.kind == Kind.NOTICE_ACK else 0))
         if p.flags & ~allowed_flags or not p.identity.client: self.counters['invalid'] += 1; return
         if p.kind == Kind.HELLO:
             new_peer = self.client_nonce is None or p.identity.client != self.client_nonce
@@ -134,13 +138,18 @@ class ContinuousSession(AudioPipeline):
                 self.notification_offer = bool(p.flags & CAP_NOTIFICATIONS)
                 self.notifications_capable = (self.notification_offer and self.config.calendar_reminders_enabled
                                               and self.config.voice_provider == 'gemini')
+                self.standby_notification_offer = bool(p.flags & CAP_STANDBY_NOTIFICATIONS)
+                self.standby_notifications_capable = self.notifications_capable and self.standby_notification_offer
                 self.peer_eye_offer = offered
                 self.eyes_capable = offered and self.config.expression_udp_enabled
                 self.eye_plans.reset()
-            elif offered != self.peer_eye_offer or bool(p.flags & CAP_NOTIFICATIONS) != self.notification_offer:
+            elif (offered != self.peer_eye_offer or bool(p.flags & CAP_NOTIFICATIONS) != self.notification_offer
+                  or bool(p.flags & CAP_STANDBY_NOTIFICATIONS) != self.standby_notification_offer):
                 self.counters['invalid'] += 1; return  # Capabilities are fixed for a client nonce.
             self.last_peer_seen=time.monotonic()
-            capabilities = (CAP_NOTIFICATIONS if self.notifications_capable else 0) | (CAP_EYES_PLAN if self.eyes_capable else 0) | (CAP_DEVICE_MAC if mac else 0)
+            capabilities = ((CAP_NOTIFICATIONS if self.notifications_capable else 0)
+                            | (CAP_STANDBY_NOTIFICATIONS if self.standby_notifications_capable else 0)
+                            | (CAP_EYES_PLAN if self.eyes_capable else 0) | (CAP_DEVICE_MAC if mac else 0))
             self._send(Kind.HELLO_ACK, Identity(self.client_nonce,self.server_nonce,0,0),p.sequence,flags=2|capabilities|int(self.ready()))
             return
         if addr != self.remote_addr or p.identity.client != self.client_nonce:
@@ -153,6 +162,15 @@ class ContinuousSession(AudioPipeline):
             self.last_peer_seen=time.monotonic()
             self._send(Kind.PONG,p.identity,p.sequence,flags=int(self.ready())); return
         current = self.conversation.identity
+        if p.kind == Kind.NOTICE_ACK:
+            notice = self.pending_notice
+            if (not self.standby_notifications_capable or p.body or notice is None or not notice.get('standby')
+                    or p.identity != current or p.identity != notice['identity']
+                    or p.sequence != notice['sequence'] or notice['future'].done()):
+                self.counters['stale'] += 1; return
+            self.last_peer_seen = time.monotonic()
+            notice['future'].set_result(bool(p.flags & 1))
+            return
         if p.kind == Kind.EVENT_ACK:
             if self.events.ack(p): self.last_peer_seen=time.monotonic()
             return
@@ -260,10 +278,12 @@ class ContinuousSession(AudioPipeline):
         except asyncio.CancelledError: pass
 
     async def deliver_notification(self, reminder, claim):
-        if (not self.notifications_capable or not self.ready() or self.conversation.identity
+        if (not self.notifications_capable or not self.ready()
                 or self.pending_notice or not self.client_nonce
                 or time.monotonic() - self.last_peer_seen >= self.config.core_disconnect_timeout_sec):
             return False
+        if self.conversation.identity:
+            return await self.deliver_standby_notification(reminder, claim)
         self.next_notice += 1
         if self.next_notice > 0xffffffff:
             return False  # New server nonce is required before sequence wrap.
@@ -287,6 +307,59 @@ class ContinuousSession(AudioPipeline):
                 self.pending_notice = None
                 if notice['identity'] is not None and self.conversation.identity == notice['identity'] and not future.done():
                     self.schedule(self.fail('notification_timeout'))
+            if not future.done():
+                future.cancel()
+
+    def defer_notice(self, reason):
+        if self.notice_deferred_reason != reason:
+            event('NOTICE_DEFERRED', self.conversation.identity, reason=reason)
+            self.notice_deferred_reason = reason
+        return False
+
+    def standby_notice_ready(self, token):
+        return (self.standby_notifications_capable and self.ready() and self.input_live
+                and self.conversation.identity == token and self.conversation.phase == Phase.LISTENING
+                and self.conversation.response is None and self.xai.ready_event.is_set()
+                and not getattr(self.xai, 'speaking', False)
+                and not self.interruptions.active and not getattr(self.xai, 'pending_tools', {})
+                and not self.provider_input.pending and self.input.queue.empty())
+
+    async def deliver_standby_notification(self, reminder, claim):
+        token = self.conversation.identity
+        utterance = self.conversation.utterance
+        if not self.standby_notice_ready(token):
+            return self.defer_notice('session_busy_or_standby_unsupported')
+        self.next_notice += 1
+        if self.next_notice > 0xffffffff:
+            return False
+        future = asyncio.get_running_loop().create_future()
+        notice = {'sequence': self.next_notice, 'reminder': reminder, 'claim': claim,
+                  'future': future, 'identity': token, 'standby': True}
+        self.pending_notice = notice
+        deadline = time.monotonic() + 2
+        try:
+            while not future.done() and time.monotonic() < deadline:
+                if not self.standby_notice_ready(token) or self.conversation.utterance != utterance:
+                    return self.defer_notice('session_became_busy')
+                self._send(Kind.NOTICE, token, notice['sequence'])
+                try:
+                    await asyncio.wait_for(asyncio.shield(future), .25)
+                except TimeoutError:
+                    pass
+            if not future.done() or not future.result():
+                return self.defer_notice('core_not_in_standby_or_unconfirmed')
+            if (not self.standby_notice_ready(token) or self.conversation.utterance != utterance
+                    or not claim(reminder)):
+                return self.defer_notice('no_longer_due_or_session_changed')
+            # Claim is durable before the provider send; never replay an uncertain send.
+            event('NOTICE_STANDBY_ACCEPTED', token, request=notice['sequence'])
+            await self.xai.send_notification(reminder.message(ZoneInfo(self.config.calendar_time_zone)))
+            self.notice_deferred_reason = None
+            event('NOTICE_SUBMITTED', token, request=notice['sequence'], mode='standby')
+            return True
+        finally:
+            if self.pending_notice is notice:
+                self.pending_notice = None
             if not future.done():
                 future.cancel()
 

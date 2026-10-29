@@ -11,7 +11,9 @@ from unittest.mock import AsyncMock, MagicMock, patch
 from bridge.config import BridgeConfig
 from bridge.notifications.calendar import CalendarReminders, Reminder
 from bridge.conversation.session import ContinuousSession
-from bridge.transport.protocols.conversation import (CAP_NOTIFICATIONS, Identity, Kind, Packet, Event, encode)
+from bridge.transport.protocols.conversation import (CAP_NOTIFICATIONS, CAP_STANDBY_NOTIFICATIONS,
+                                                    Identity, Kind, Packet, Event, encode)
+from bridge.conversation.state import Phase
 from test_v3 import Transport, settle
 
 
@@ -130,7 +132,8 @@ class NotificationSessionTests(unittest.IsolatedAsyncioTestCase):
         self.transport = Transport()
         self.s.connection_made(self.transport)
         self.addr = ('127.0.0.1', 12000)
-        self.s.datagram_received(encode(Packet(Kind.HELLO, CAP_NOTIFICATIONS, Identity(7, 0, 0, 0), 1)), self.addr)
+        self.s.datagram_received(encode(Packet(Kind.HELLO, CAP_NOTIFICATIONS | CAP_STANDBY_NOTIFICATIONS,
+                                              Identity(7, 0, 0, 0), 1)), self.addr)
         self.reminder = Reminder('key', datetime.now(timezone.utc) + timedelta(minutes=10), 'Test', 'primary')
         self.jobs = []
 
@@ -147,6 +150,7 @@ class NotificationSessionTests(unittest.IsolatedAsyncioTestCase):
         self.s.notifications_capable = False
         self.assertFalse(await self.s.deliver_notification(self.reminder, lambda _: True))
         self.s.notifications_capable = True
+        self.s.standby_notifications_capable = False
         self.s.conversation.open(Identity(7, self.s.server_nonce, 1, 0))
         self.assertFalse(await self.s.deliver_notification(self.reminder, lambda _: True))
         self.assertFalse(any(p.kind == Kind.NOTICE for p in self.transport.sent))
@@ -183,6 +187,136 @@ class NotificationSessionTests(unittest.IsolatedAsyncioTestCase):
         await settle()
         self.assertEqual(claims, ['key'])
         self.s.xai.send_notification.assert_awaited_once()
+
+    def active_standby(self):
+        token = Identity(7, self.s.server_nonce, 1, 0)
+        self.s.conversation.open(token)
+        self.s.input_live = True
+        self.s.xai.ready_event.set()
+        self.s.xai.send_notification = AsyncMock()
+        return token
+
+    async def offer_standby(self, claim):
+        delivery = asyncio.create_task(self.s.deliver_notification(self.reminder, claim))
+        self.jobs.append(delivery)
+        await settle()
+        notice = next(p for p in reversed(self.transport.sent) if p.kind == Kind.NOTICE)
+        return delivery, notice
+
+    def admit_notice(self, notice, flags=1, **changes):
+        packet = Packet(Kind.NOTICE_ACK, flags, changes.get('identity', notice.identity),
+                        changes.get('sequence', notice.sequence), changes.get('body', b''))
+        self.s.datagram_received(encode(packet), self.addr)
+
+    async def test_standby_reuses_provider_and_turn_after_core_admission(self):
+        token = self.active_standby()
+        original_input = self.s.input
+        self.s.xai.connect = AsyncMock()
+        claim = MagicMock(return_value=True)
+        delivery, notice = await self.offer_standby(claim)
+        self.assertEqual(notice.identity, token)
+        claim.assert_not_called()
+        self.s.xai.send_notification.assert_not_awaited()
+        self.admit_notice(notice)
+        self.assertTrue(await asyncio.wait_for(delivery, 1))
+        self.assertEqual(self.s.conversation.identity, token)
+        self.assertIs(self.s.input, original_input)
+        self.s.xai.connect.assert_not_awaited()
+        claim.assert_called_once_with(self.reminder)
+        self.s.xai.send_notification.assert_awaited_once()
+        self.admit_notice(notice)  # Late duplicate must not submit again.
+        self.s.xai.send_notification.assert_awaited_once()
+        self.assertFalse(any(p.kind in (Kind.START_ACK, Kind.CANCEL_ACK) for p in self.transport.sent))
+
+    async def test_active_listener_or_manual_wake_defers_without_claim(self):
+        token = self.active_standby()
+        claim = MagicMock(return_value=True)
+        delivery, notice = await self.offer_standby(claim)
+        self.admit_notice(notice, flags=0)
+        self.assertFalse(await delivery)
+        claim.assert_not_called()
+        self.s.xai.send_notification.assert_not_awaited()
+        self.assertEqual(self.s.conversation.identity, token)
+
+    async def test_speech_response_and_tools_defer_standby_notice(self):
+        self.active_standby()
+        claim = MagicMock(return_value=True)
+        for phase in (Phase.THINKING, Phase.RESPONDING):
+            self.s.conversation.phase = phase
+            self.assertFalse(await self.s.deliver_notification(self.reminder, claim))
+        self.s.conversation.phase = Phase.LISTENING
+        self.s.xai.pending_tools['tool'] = object()
+        self.assertFalse(await self.s.deliver_notification(self.reminder, claim))
+        self.s.xai.pending_tools.clear()
+        self.assertFalse(any(p.kind == Kind.NOTICE for p in self.transport.sent))
+        claim.assert_not_called()
+
+    async def test_stale_malformed_and_foreign_notice_ack_cannot_claim(self):
+        token = self.active_standby()
+        claim = MagicMock(return_value=True)
+        delivery, notice = await self.offer_standby(claim)
+        self.admit_notice(notice, sequence=notice.sequence + 1)
+        self.admit_notice(notice, body=b'x')
+        self.admit_notice(notice, flags=2)
+        self.admit_notice(notice, identity=replace(token, turn=2))
+        self.admit_notice(notice, identity=replace(token, server=token.server + 1))
+        await settle()
+        self.assertFalse(delivery.done())
+        claim.assert_not_called()
+        self.admit_notice(notice)
+        self.assertTrue(await delivery)
+
+    async def test_state_change_or_expiry_after_core_ack_does_not_send(self):
+        for change in ('thinking', 'speaking', 'expired', 'closed'):
+            token = self.active_standby()
+            claim = MagicMock(return_value=change != 'expired')
+            delivery, notice = await self.offer_standby(claim)
+            if change == 'thinking':
+                self.s.conversation.speech_stopped()
+            elif change == 'speaking':
+                self.s.conversation.speech_started()
+            elif change == 'closed':
+                await self.s.close_remote(token, 0)
+            self.admit_notice(notice, flags=0 if change == 'closed' else 1)
+            self.assertFalse(await delivery)
+            self.s.xai.send_notification.assert_not_awaited()
+
+    async def test_lost_standby_ack_preserves_session_and_does_not_claim(self):
+        token = self.active_standby()
+        claim = MagicMock(return_value=True)
+        delivery, notice = await self.offer_standby(claim)
+        self.assertFalse(await asyncio.wait_for(delivery, 3))
+        self.assertEqual(self.s.conversation.identity, token)
+        self.assertIsNone(self.s.pending_notice)
+        claim.assert_not_called()
+        self.s.xai.send_notification.assert_not_awaited()
+
+    async def test_uncertain_standby_send_is_claimed_and_not_replayed(self):
+        self.active_standby()
+        self.s.xai.send_notification.side_effect = TimeoutError('uncertain')
+        with tempfile.TemporaryDirectory() as directory:
+            config = replace(self.config, calendar_reminder_state=str(Path(directory) / 'state.json'))
+            now = datetime.now(timezone.utc)
+            items = [{'id': 'near', 'start': {'dateTime': (now + timedelta(minutes=5)).isoformat()}}]
+            monitor = CalendarReminders(config, self.s.deliver_notification, lambda: items, lambda: now)
+            await monitor.refresh()
+            tick = asyncio.create_task(monitor.tick());self.jobs.append(tick)
+            await settle()
+            notice = next(p for p in reversed(self.transport.sent) if p.kind == Kind.NOTICE)
+            self.admit_notice(notice)
+            with self.assertRaises(TimeoutError):
+                await tick
+            self.assertTrue(monitor.claimed)
+            await monitor.tick()
+            self.s.xai.send_notification.assert_awaited_once()
+
+    async def test_standby_capability_is_optional_and_fixed_per_client(self):
+        self.assertTrue(self.s.standby_notifications_capable)
+        self.s.datagram_received(encode(Packet(Kind.HELLO, CAP_NOTIFICATIONS, Identity(7, 0, 0, 0), 2)), self.addr)
+        self.assertTrue(self.s.standby_notifications_capable)  # Invalid capability change.
+        self.s.datagram_received(encode(Packet(Kind.HELLO, CAP_NOTIFICATIONS, Identity(8, 0, 0, 0), 3)), self.addr)
+        self.assertTrue(self.s.notifications_capable)
+        self.assertFalse(self.s.standby_notifications_capable)  # Old CORE keeps idle notices.
 
     async def test_manual_start_wins_without_injecting_reminder(self):
         self.s.run_provider = AsyncMock()
