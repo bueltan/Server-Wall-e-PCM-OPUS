@@ -10,6 +10,7 @@ VERSION = 3
 HEADER = struct.Struct('!4sBBHQQIIIH')
 MAX_BODY = 658
 CAP_EYES_PLAN = 0x0004  # Optional HELLO offer / HELLO_ACK acceptance.
+CAP_DEVICE_MAC = 0x0008  # HELLO body: six raw station-MAC bytes; ACK confirms binding.
 
 class Kind(IntEnum):
     HELLO=1

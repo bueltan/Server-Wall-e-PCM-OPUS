@@ -7,7 +7,7 @@ import time
 from bridge.audio.pipeline import AudioPipeline
 from bridge.transport.downlink_recovery import DownlinkRecovery
 from bridge.conversation.state import Conversation
-from bridge.transport.protocols.conversation import Identity, Packet, Kind, Event, encode, decode, CAP_EYES_PLAN
+from bridge.transport.protocols.conversation import Identity, Packet, Kind, Event, encode, decode, CAP_EYES_PLAN, CAP_DEVICE_MAC
 from bridge.expressions.delivery import EyePlanDelivery
 from bridge.transport.reliable_events import ReliableEvents
 from bridge.providers import create_provider
@@ -25,6 +25,7 @@ class ContinuousSession(AudioPipeline):
                 raise ValueError(f"{name} must be finite and positive")
         super().__init__(config)
         self.transport = self.remote_addr = self.client_nonce = None
+        self.device_mac = None
         self.server_nonce = secrets.randbits(64) or 1
         self.retired = []
         self.last_conversation = 0
@@ -88,24 +89,41 @@ class ContinuousSession(AudioPipeline):
     def datagram_received(self, data, addr):
         try: p = decode(data)
         except (ValueError, struct.error): self.counters['invalid'] += 1; return
-        allowed_flags = CAP_EYES_PLAN if p.kind == Kind.HELLO else 0
+        allowed_flags = CAP_EYES_PLAN | CAP_DEVICE_MAC if p.kind == Kind.HELLO else 0
         if p.flags & ~allowed_flags or not p.identity.client: self.counters['invalid'] += 1; return
         if p.kind == Kind.HELLO:
             new_peer = self.client_nonce is None or p.identity.client != self.client_nonce
-            if p.body or p.identity.server or p.identity.turn or p.identity.response: return
+            mac = p.body if p.flags & CAP_DEVICE_MAC else None
+            if (p.identity.server or p.identity.turn or p.identity.response or
+                (mac is None and p.body) or
+                (mac is not None and (len(mac)!=6 or not any(mac) or mac[0]&1))):
+                self.counters['invalid'] += 1; return
+            # First admission pins the device for this server process. The MAC
+            # is a declared identity, not cryptographic proof of origin.
+            if self.device_mac is not None and mac != self.device_mac:
+                self.counters['foreign'] += 1; return
             if self.client_nonce is None:
-                self.client_nonce = p.identity.client; self.remote_addr = addr
-            if addr != self.remote_addr: self.counters['foreign'] += 1; return
+                self.client_nonce = p.identity.client; self.remote_addr = addr; self.device_mac = mac
+                event('CORE_ADMITTED', device_mac=mac.hex(':') if mac else None,
+                      peer=addr, client=f'{self.client_nonce:016x}')
+            if addr != self.remote_addr and not (new_peer and mac is not None and mac == self.device_mac):
+                self.counters['foreign'] += 1; return
             if p.identity.client != self.client_nonce:
                 if p.identity.client in self.retired: return
                 if self.conversation.identity or self.pending or not self.ready():
                     if self.conversation.identity and not self.peer_resetting:
                         self.peer_resetting=True; self.schedule(self.fail('peer_restarted'))
                     return
+                old_addr = self.remote_addr
                 self.retired = (self.retired + [self.client_nonce])[-32:]
                 self.client_nonce = p.identity.client
+                self.remote_addr = addr
+                self.device_mac = mac
                 self.server_nonce = secrets.randbits(64) or 1
                 self.last_conversation = 0; self.acks.clear()
+                self.events.reset(); self.downlink.reset()
+                event('CORE_REBOUND', device_mac=mac.hex(':') if mac else None,
+                      old_peer=old_addr, peer=addr, client=f'{self.client_nonce:016x}')
             offered = bool(p.flags & CAP_EYES_PLAN)
             if new_peer:
                 self.peer_eye_offer = offered
@@ -114,7 +132,7 @@ class ContinuousSession(AudioPipeline):
             elif offered != self.peer_eye_offer:
                 self.counters['invalid'] += 1; return  # Capabilities are fixed for a client nonce.
             self.last_peer_seen=time.monotonic()
-            capabilities = CAP_EYES_PLAN if self.eyes_capable else 0
+            capabilities = (CAP_EYES_PLAN if self.eyes_capable else 0) | (CAP_DEVICE_MAC if mac else 0)
             self._send(Kind.HELLO_ACK, Identity(self.client_nonce,self.server_nonce,0,0),p.sequence,flags=2|capabilities|int(self.ready()))
             return
         if addr != self.remote_addr or p.identity.client != self.client_nonce:
@@ -237,6 +255,8 @@ class ContinuousSession(AudioPipeline):
         while True:
             p = await self.controls.get()
             try:
+                if self.peer_resetting:
+                    self.ack(p,False); continue
                 if p.kind == Kind.START:
                     if self.conversation.identity or p.identity.turn <= self.last_conversation or not self.ready():
                         self.ack(p,False); continue

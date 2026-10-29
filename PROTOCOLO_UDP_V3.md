@@ -138,3 +138,37 @@ El cuerpo máximo del plan es 28 bytes (66 con cabecera), con hasta tres pasos
 atómicos de emoción/gesto y offsets de reproducción. La falta de ACK visual no
 bloquea ni cancela audio. CORE ya implementa recepción/planificación y anuncia soporte; queda validar
 la sincronía y el uso de recursos en hardware. Contrato completo y vectores: [PROTOCOLO_EYES_V1.md](PROTOCOLO_EYES_V1.md).
+
+## Identidad estable de CORE y reconexión UDP
+
+`CAP_DEVICE_MAC=0x0008` en HELLO indica un cuerpo de exactamente seis bytes:
+la MAC WiFi STA de CORE, en orden de red (ejemplo `02 12 34 56 78 9a`). Se
+rechazan MAC cero, multicast, cuerpos de otra longitud y cuerpos sin el bit.
+HELLO conserva `server_nonce=turn=response=0`; `client_nonce` sigue siendo la
+identidad variable de la sesión, no la MAC. HELLO_ACK no tiene cuerpo y confirma
+el bit `0x0008`. El firmware que anuncia MAC exige esa confirmación.
+
+El backend admite un dispositivo por proceso. El primer HELLO fija la MAC;
+los siguientes deben declarar la misma. Esa declaración es la regla de admisión
+actual, sin firma ni clave compartida: todavía no es autenticación criptográfica.
+La asociación no se guarda en disco y se pierde al reiniciar el backend.
+
+Un HELLO con la misma MAC y un `client_nonce` nuevo permite cambiar IP y/o puerto
+sin esperar el timeout de ausencia. Si hay una conversación activa, primero se
+cierra el proveedor y se limpian audio, reparaciones y eventos; CORE reintenta
+HELLO hasta que termina ese cierre. Entonces el backend retira el nonce anterior,
+genera otro `server_nonce`, cambia la dirección y reinicia la numeración de
+conversaciones. Debe llegar un START nuevo; no se conserva historial del proveedor.
+No se redirige la sesión por un PING, PCM ni HELLO con el mismo nonce desde otra
+dirección. CORE renueva su nonce al perder el enlace, incluso estando inactivo
+(6 s), para recuperar también un cambio de puerto NAT sin reiniciar el equipo.
+Los últimos 32 nonces retirados se rechazan para evitar que HELLO retrasados
+restauren una sesión anterior; los demás paquetes deben coincidir con la sesión
+actual y su dirección.
+
+Los clientes anteriores, con HELLO sin MAC, conservan el handshake restringido
+al origen original. No pueden reemplazar un dispositivo ya asociado por MAC.
+Actualizar primero PIUU_SERVER y después CORE. Diagnóstico: `CORE_ADMITTED`
+identifica la primera admisión; `CORE_REBOUND` registra MAC y direcciones anterior
+y nueva. Esta recuperación del transporte es independiente del bloqueo de lectura
+UDP de CORE, que requiere una corrección separada.

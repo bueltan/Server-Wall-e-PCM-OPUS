@@ -2,6 +2,13 @@
 
 ## 2026-10-28
 
+- Bind CORE by its declared WiFi station MAC (`CAP_DEVICE_MAC=0x0008`, six-byte HELLO body) and confirm the extension in HELLO_ACK.
+- Admit the same device with a fresh session from a changed IP/UDP port after closing the previous conversation and provider; require a new START without retaining history.
+- Rotate the server nonce, clear pending event/downlink state and reject queued controls during peer reset; keep the last 32 retired client nonces from restoring old sessions.
+- Reject a different or missing MAC once a device is bound; preserve original-address admission for legacy HELLO clients. The binding lasts for this process and currently trusts the declared MAC without cryptographic authentication.
+- Add CORE_ADMITTED/CORE_REBOUND lifecycle logs and offline regressions for IP/port changes, malformed MACs, delayed old packets, queued controls and provider-close ordering.
+- Pass all 161 backend tests plus CORE/backend wire interoperability checks; document server-first deployment and pending hardware validation. No backend deployment or CORE flashing was performed in this chat.
+
 - Configure neutral Latin American Spanish (international dubbing style) delivery prompt and system instructions.
 
 ## 2026-10-27

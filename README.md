@@ -1,5 +1,46 @@
 # PIUU CORE ↔ xAI Voice bridge
 
+## Reconexión de CORE por MAC (2026-10-28)
+
+CORE anuncia su MAC WiFi STA en los seis bytes del cuerpo HELLO, con
+`CAP_DEVICE_MAC=0x0008`. El backend confirma ese bit en HELLO_ACK y asocia la primera
+MAC declarada durante la vida del proceso. Otra MAC, o un HELLO sin MAC después
+de esa asociación, no puede reemplazar al dispositivo admitido. Se confía en la
+MAC declarada; la verificación mediante una clave compartida queda pendiente.
+La asociación no se persiste y se pierde al reiniciar PIUU_SERVER.
+
+Un HELLO de la misma MAC con un nonce de sesión nuevo permite actualizar la IP
+y/o el puerto UDP sin esperar los diez segundos de ausencia. Si hay conversación
+activa, primero se cierra el proveedor y se limpian audio y eventos; CORE reintenta
+HELLO hasta completar el cierre. Después se genera un nuevo nonce de servidor y
+se exige otro START. No se conserva ni se reanuda el historial de conversación.
+Los paquetes deben coincidir con la sesión y dirección actuales; los últimos 32
+nonces retirados no pueden restaurar una conexión anterior.
+
+`CORE_ADMITTED` registra la admisión inicial y `CORE_REBOUND` la nueva sesión y
+las direcciones anterior/nueva. `peer_restarted` significa cambio de identidad de
+sesión; por sí solo no demuestra un reinicio físico de CORE. Los clientes legacy
+con HELLO sin MAC conservan su restricción a la dirección de origen original.
+Ver el [contrato de identidad MAC](PROTOCOLO_UDP_V3.md#identidad-estable-de-core-y-reconexión-udp).
+
+**Desplegar primero PIUU_SERVER y después el firmware CORE actualizado.** CORE
+exige la confirmación del bit MAC; un backend anterior no es compatible con ese
+handshake. La corrección de coordinación WiFi está en CORE: un escaneo conectado
+ya no simula una desconexión ni reinicia su identidad, y el worker coordina las
+operaciones explícitas con los reintentos automáticos de Arduino.
+
+Validación realizada: **161 pruebas backend offline**, pruebas host y de
+interoperabilidad CORE/backend, y compilación del firmware `cyd-uart0`. Desde
+PIUU_SERVER, repetir las pruebas del backend con:
+
+```bash
+PYTHONPATH=src .venv/bin/python -m unittest discover -s tests
+```
+
+No se desplegó el backend ni se cargó firmware durante este chat. Falta validar
+los cambios en el VPS y el hardware. El bloqueo de lectura UDP identificado en
+CORE sigue pendiente; recuperar identidad/dirección no corrige ese fallo.
+
 ## Gemini Live (UDP v3)
 
 El backend permite elegir `gemini` (predeterminado) o `xai` sin cambiar el firmware,
@@ -124,8 +165,8 @@ PIU3; los sobres v1/v2 se rechazan. El cuerpo audio conserva su formato anterior
 - Conversación continua, PCM también durante las respuestas y IDs por respuesta.
 - START/CANCEL/INTERRUPT/PLAYED y eventos del servidor con ACK idempotentes.
 - xAI abre bajo demanda; búfer inicial 300 frames y timeout de apertura 6 segundos.
-- CORE informa silencio y cierra por 30 segundos de inactividad; touch cierra.
-- No hay reconexión automática ni historial retenido después de un cierre.
+- CORE cierra al vencer `CONVERSATION_IDLE_TIMEOUT_MS` (10 segundos en la configuración actual); touch cierra.
+- El transporte UDP puede renegociarse; la conexión al proveedor requiere otro START y no retiene historial después de un cierre.
 - Se mantienen recuperación PCM acotada, cola normal de 16 frames y silencio
   de 20 ms por frame irrecuperable, hasta 200 ms por hueco.
 
@@ -145,7 +186,7 @@ El valor inicial es **10 segundos** y se comprueba cada segundo mediante reloj
 monotónico. HELLO del cliente admitido, PING válido, PCM válido y controles/ACK
 válidos actualizan la presencia; actividad de xAI, paquetes malformados y otros
 clientes no la renuevan. El límite es independiente del cierre por silencio de
-30 segundos que decide CORE. Los ACK de eventos también pueden provocar un
+`CONVERSATION_IDLE_TIMEOUT_MS` que decide CORE. Los ACK de eventos también pueden provocar un
 cierre antes si agotan sus reintentos.
 
 Al vencer se registra `CORE_DISCONNECTED` y se cierra la conversación: se cancela
