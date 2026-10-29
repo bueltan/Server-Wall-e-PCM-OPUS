@@ -13,6 +13,7 @@ CAP_EYES_PLAN = 0x0004  # Optional HELLO offer / HELLO_ACK acceptance.
 CAP_NOTIFICATIONS = 0x0010  # Optional idle wake; correlated START carries request ID.
 CAP_STANDBY_NOTIFICATIONS = 0x0020  # Active-turn NOTICE / NOTICE_ACK admission.
 CAP_DEVICE_MAC = 0x0008  # HELLO body: six raw station-MAC bytes; ACK confirms binding.
+CAP_VOLUME_CONTROL = 0x0040
 
 class Kind(IntEnum):
     HELLO=1
@@ -44,6 +45,8 @@ class Kind(IntEnum):
     EYES_PLAN_ACK=27
     NOTICE=28  # Session-level empty wake request; CORE owns the new turn ID.
     NOTICE_ACK=29  # Empty active-turn reply; flags=1 accepts standby, 0 defers.
+    VOLUME=30  # Three bytes: operation, signed value, persist (0/1).
+    VOLUME_ACK=31  # Four bytes: status, level, restore level, saved level.
 
 @dataclass(frozen=True)
 class Identity:

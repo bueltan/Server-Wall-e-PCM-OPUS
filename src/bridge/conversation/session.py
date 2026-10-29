@@ -17,6 +17,8 @@ from bridge.audio.provider_input import ProviderInput
 from bridge.diagnostics.logging import event
 from bridge.audio.startup_audio import StartupAudio
 from bridge.conversation.interruption import InterruptionCoordinator
+from bridge.transport.device_control import VolumeTransactions
+from bridge.transport.protocols.conversation import CAP_VOLUME_CONTROL
 
 class ContinuousSession(AudioPipeline):
     def __init__(self, config):
@@ -35,6 +37,9 @@ class ContinuousSession(AudioPipeline):
         self.acks = {}; self.pending = set()
         self.tasks = []
         self.closing = False
+        self.volume = VolumeTransactions(self)
+        self.volume_offer = None
+        self.volume_capable = False
         self.peer_resetting = False
         self.last_peer_seen = time.monotonic()
         self.repairs = set()
@@ -97,7 +102,7 @@ class ContinuousSession(AudioPipeline):
     def datagram_received(self, data, addr):
         try: p = decode(data)
         except (ValueError, struct.error): self.counters['invalid'] += 1; return
-        allowed_flags = (CAP_EYES_PLAN | CAP_DEVICE_MAC | CAP_NOTIFICATIONS | CAP_STANDBY_NOTIFICATIONS
+        allowed_flags = (CAP_EYES_PLAN | CAP_DEVICE_MAC | CAP_NOTIFICATIONS | CAP_STANDBY_NOTIFICATIONS | CAP_VOLUME_CONTROL
                          if p.kind == Kind.HELLO else (1 if p.kind == Kind.NOTICE_ACK else 0))
         if p.flags & ~allowed_flags or not p.identity.client: self.counters['invalid'] += 1; return
         if p.kind == Kind.HELLO:
@@ -135,6 +140,9 @@ class ContinuousSession(AudioPipeline):
                       old_peer=old_addr, peer=addr, client=f'{self.client_nonce:016x}')
             offered = bool(p.flags & CAP_EYES_PLAN)
             if new_peer:
+                self.volume.reset()
+                self.volume_offer = bool(p.flags & CAP_VOLUME_CONTROL)
+                self.volume_capable = self.volume_offer and self.config.device_mcp_enabled
                 self.notification_offer = bool(p.flags & CAP_NOTIFICATIONS)
                 self.notifications_capable = (self.notification_offer and self.config.calendar_reminders_enabled
                                               and self.config.voice_provider == 'gemini')
@@ -144,10 +152,12 @@ class ContinuousSession(AudioPipeline):
                 self.eyes_capable = offered and self.config.expression_udp_enabled
                 self.eye_plans.reset()
             elif (offered != self.peer_eye_offer or bool(p.flags & CAP_NOTIFICATIONS) != self.notification_offer
-                  or bool(p.flags & CAP_STANDBY_NOTIFICATIONS) != self.standby_notification_offer):
+                  or bool(p.flags & CAP_STANDBY_NOTIFICATIONS) != self.standby_notification_offer
+                  or bool(p.flags & CAP_VOLUME_CONTROL) != self.volume_offer):
                 self.counters['invalid'] += 1; return  # Capabilities are fixed for a client nonce.
             self.last_peer_seen=time.monotonic()
             capabilities = ((CAP_NOTIFICATIONS if self.notifications_capable else 0)
+                            | (CAP_VOLUME_CONTROL if self.volume_capable else 0)
                             | (CAP_STANDBY_NOTIFICATIONS if self.standby_notifications_capable else 0)
                             | (CAP_EYES_PLAN if self.eyes_capable else 0) | (CAP_DEVICE_MAC if mac else 0))
             self._send(Kind.HELLO_ACK, Identity(self.client_nonce,self.server_nonce,0,0),p.sequence,flags=2|capabilities|int(self.ready()))
@@ -162,6 +172,10 @@ class ContinuousSession(AudioPipeline):
             self.last_peer_seen=time.monotonic()
             self._send(Kind.PONG,p.identity,p.sequence,flags=int(self.ready())); return
         current = self.conversation.identity
+        if p.kind == Kind.VOLUME_ACK:
+            if self.volume_capable and self.volume.receive(p):
+                self.last_peer_seen = time.monotonic()
+            return
         if p.kind == Kind.NOTICE_ACK:
             notice = self.pending_notice
             if (not self.standby_notifications_capable or p.body or notice is None or not notice.get('standby')
@@ -558,6 +572,7 @@ class ContinuousSession(AudioPipeline):
             await self.fail('peer_timeout')
 
     def connection_lost(self, exc):
+        self.volume.reset()
         self.conversation.close(); self.input.close(); self.provider_input.close(); self.events.close(); self.downlink.reset()
         self.eye_plans.reset()
         self.expressions.reset('connection_lost')

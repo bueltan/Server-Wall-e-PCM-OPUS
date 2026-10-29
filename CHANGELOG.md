@@ -2,6 +2,13 @@
 
 ## 2026-10-29
 
+- Add optional Device MCP over stdio with an independent ToolManager and a persistent authenticated loopback WebSocket gateway into the session-owned UDP transport. Keep device controls independent of slow Google tool calls and bind local connections to their opening conversation.
+- Add volume query/set/relative adjustment and shared mute/restore, optional explicit persistence, CAP_VOLUME_CONTROL=0x0040 and VOLUME/VOLUME_ACK=30/31. Confirm only CORE acknowledgements, deduplicate UDP retries and preserve unknown outcomes without replaying WebSocket mutations.
+- Interpret Spanish lower/higher-volume requests as −20/+20 percentage points when unspecified, including «hablá más despacio» as lower volume; an explicit amount replaces that step and a repeated reference in one request must produce one adjustment. Playback speed is unchanged.
+- Add offline real stdio/WebSocket, validation, session binding, authentication, failure and Python/C++ wire coverage. Document activation, server-first upgrade order, temporary versus saved levels, and pending live voice/hardware validation; no deployment or firmware upload performed.
+- Catch unexpected device-tool, WebSocket client/gateway and UDP transport exceptions with fixed safe codes and uncertain-write outcomes. Add correlated device lifecycle/retry/result logs, sanitize exception metadata and keep tokens, arbitrary request IDs and raw exception text out of diagnostics. Cover injected failures and connection recovery offline.
+- Pass all 251 backend tests, Python syntax compilation and dependency consistency checks; the paired CORE host suite, Python/C++ interoperability and cyd-uart0 build pass. Live deployment, firmware upload and spoken-command validation remain pending.
+
 - Deliver Calendar reminders through the existing Gemini connection when CORE explicitly admits a preserved standby turn. Negotiate CAP_STANDBY_NOTIFICATIONS=0x0020 and NOTICE_ACK=29; keep existing idle START/READY delivery for older CORE firmware.
 - Revalidate session/utterance, provider readiness, response/tool/history/input activity and reminder eligibility after CORE admission. Preserve durable claim-before-send deduplication, defer busy sessions and keep the conversation open after a lost admission ACK.
 - Add offline coverage for standby reuse, manual activation/busy rejection, stale/malformed ACKs, state changes, expired events, lost ACKs, optional negotiation and uncertain-send deduplication; document server-first deployment and pending live reproduction.

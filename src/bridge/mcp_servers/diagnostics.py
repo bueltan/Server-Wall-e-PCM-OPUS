@@ -17,7 +17,10 @@ calendar_access_denied calendar_not_found event_id_conflict calendar_api_error
 calendar_write_not_confirmed calendar_unavailable availability_unknown
 contacts_write_auth_required contacts_auth_required people_api_disabled invalid_contact_data
 contacts_access_denied contact_not_found contacts_rate_limited contacts_unavailable
-contact_create_not_confirmed send_not_confirmed'''.split()) | frozenset(
+contact_create_not_confirmed send_not_confirmed
+invalid_volume_arguments device_busy device_session_changed volume_unsupported
+device_unavailable volume_not_confirmed volume_save_failed duplicate_device_request
+device_connection_expired device_internal_error device_transport_error'''.split()) | frozenset(
     prefix + suffix for prefix in ('gmail', 'calendar') for suffix in
     ('_invalid_request', '_auth_required', '_access_denied', '_not_found', '_rate_limited',
      '_api_error', '_api_disabled', '_unavailable'))

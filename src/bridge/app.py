@@ -1,5 +1,7 @@
 import asyncio
 import math
+import secrets
+from dataclasses import replace
 from bridge.config import BridgeConfig
 from bridge.diagnostics.logging import configure_logging, event
 from bridge.transport.udp import UdpAudioBridgeProtocol
@@ -8,6 +10,12 @@ from bridge.transport.udp import UdpAudioBridgeProtocol
 async def async_main() -> None:
     configure_logging()
     config = BridgeConfig()
+    if config.device_mcp_enabled:
+        if config.voice_provider != 'gemini':
+            raise ValueError('Device MCP currently requires Gemini')
+        if not 1 <= config.device_control_port <= 65535:
+            raise ValueError('PIUU_DEVICE_CONTROL_PORT must be between 1 and 65535')
+        config = replace(config, device_control_token=secrets.token_urlsafe(32))
     event("BOOT", provider=config.voice_provider, protocol=3, port=config.port, rate=config.input_sample_rate,
           reorder_ms=config.input_reorder_window_sec*1000, recovery_ms=config.input_recovery_window_sec*1000,
           silence_max_ms=config.input_silence_max_ms)
@@ -26,13 +34,20 @@ async def async_main() -> None:
     )
 
     reminders = None
+    device_gateway = None
     try:
+        if config.device_mcp_enabled:
+            from bridge.tools.device_gateway import DeviceGateway
+            device_gateway = await DeviceGateway(_protocol.session, config.device_control_token).start(config.device_control_port)
         if config.calendar_reminders_enabled:
             from bridge.notifications.calendar import CalendarReminders
             reminders = CalendarReminders(config, _protocol.session.deliver_notification)
             reminders.start()
         await asyncio.Future()
     finally:
+        if device_gateway is not None:
+            device_gateway.close()
+            await device_gateway.wait_closed()
         if reminders is not None:
             await reminders.close()
         transport.close()

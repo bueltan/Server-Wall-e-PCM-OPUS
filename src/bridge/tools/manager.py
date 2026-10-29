@@ -38,6 +38,15 @@ def calendar_server_spec(time_zone=None):
     return google_server_spec('calendar', {'PIUU_CALENDAR_TIME_ZONE': time_zone} if time_zone else None)
 
 
+def device_server_spec(config):
+    env = {key: value for key, value in os.environ.items()
+           if key in ('PATH', 'HOME', 'LANG', 'PIUU_LOG_LEVEL')}
+    env.update(PYTHONPATH=str(Path(__file__).resolve().parents[2]),
+               PIUU_DEVICE_CONTROL_PORT=str(config.device_control_port),
+               PIUU_DEVICE_CONTROL_TOKEN=config.device_control_token)
+    return ServerSpec('device', sys.executable, ('-m', 'bridge.mcp_servers.device'), env)
+
+
 class ToolManager:
     def __init__(self, servers=(), timeout=15.0):
         self.servers = tuple(servers)
@@ -57,9 +66,9 @@ class ToolManager:
         code = code if isinstance(code, str) and code in SAFE_ERROR_CODES else ('mcp_tool_error' if code else None)
         kind = payload.get('error_kind') or data.get('error_kind')
         kind = kind if kind in ('api', 'auth', 'validation', 'exception', 'timeout', 'transport',
-                                'remote', 'shutdown', 'cancelled') else None
+                                'remote', 'shutdown', 'cancelled', 'storage') else None
         status = data.get('status')
-        status = status if isinstance(status, str) and status in ('failed', 'unknown', 'created', 'sent') else None
+        status = status if isinstance(status, str) and status in ('failed', 'unknown', 'created', 'sent', 'confirmed') else None
         http = data.get('http_status')
         exception = payload.get('exception_type') or data.get('exception_type')
         event('MCP_TOOL_FINISHED', identity, tool=name, call_id=call_id,

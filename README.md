@@ -865,3 +865,82 @@ Los errores de servidores MCP externos conservan el código genérico
 Un timeout o `status=unknown` no confirma que una escritura haya fallado: revisar
 Enviados, el contacto o el `event_id` antes de pedir otro intento. Esta mejora no
 reconstruye los detalles descartados por logs anteriores ni despliega el backend.
+
+## Control de volumen de CORE mediante Device MCP (2026-10-29)
+
+Ruta: **Gemini → ToolManager → MCP por stdio → WebSocket local → sesión UDP v3 → CORE**.
+El servicio UDP sigue siendo el único propietario de la conexión con CORE. Device
+MCP tiene un ToolManager independiente para que una operación Google lenta no
+bloquee volumen o mute. Esta integración es opcional y requiere Gemini.
+
+Instalar `src/requirements-mcp.txt` y activar `PIUU_DEVICE_MCP_ENABLED=1` en el
+entorno del bridge. `PIUU_DEVICE_CONTROL_PORT` permite cambiar el puerto local
+(8766 por defecto). El bridge escucha exclusivamente en `127.0.0.1`, rechaza
+clientes con Origin y genera un token efímero por arranque, pasado sólo al
+subproceso Device MCP. No requiere OAuth, archivos de credenciales ni un puerto
+público. No configurar el proxy para publicar este endpoint.
+
+Herramientas disponibles:
+
+| Herramienta | Comportamiento |
+| --- | --- |
+| `device_get_volume()` | Consulta nivel vivo, silencio, nivel de restauración y nivel guardado en CORE. |
+| `device_set_volume(percent, persist=false)` | Fija un entero 0–100; guarda en NVS sólo si se pide explícitamente. |
+| `device_adjust_volume(delta)` | Suma puntos entre −100 y +100, limitando el resultado a 0–100. |
+| `device_set_mute(muted)` | Silencia o recupera el último nivel no nulo compartido con la pantalla. |
+
+Las instrucciones de Gemini interpretan estos pedidos:
+
+| Pedido | Operación esperada |
+| --- | --- |
+| «Hablá más despacio», «hablá más bajo», «bajá el volumen» | −20 puntos. «Despacio» se usa aquí como volumen, sin cambiar la velocidad. |
+| «Hablá más fuerte», «subí el volumen» | +20 puntos. |
+| «Bajá/subí el volumen 10 por ciento» | −10/+10 puntos, respectivamente. |
+| «Poné el volumen al 30 por ciento» | Fija 30. |
+| «Hablá más despacio y bajá el volumen 10 por ciento» | Una sola bajada de 10 puntos. |
+| «Mute», «silencio» / «sacá el mute» | Silencia / restaura. |
+| «Guardá el volumen al 30 como predeterminado» | Fija y guarda 30. |
+
+Los porcentajes son puntos del control existente, cuya curva de ganancia está en
+dB. Por ejemplo, bajar 20 desde 60 deja 40; desde el nivel inicial 20 deja 0.
+Los cambios por voz son temporales salvo guardado explícito o salida con BACK
+desde la pantalla VOLUME. Los botones físicos de esa pantalla conservan pasos de 5.
+
+El WebSocket permanece conectado, usa `request_id` y queda vinculado a la
+conversación que lo abrió. No selecciona dispositivos por IP ni cambia de sesión
+silenciosamente. Se negocia `CAP_VOLUME_CONTROL=0x0040`; `VOLUME=30` lleva tres
+bytes (operación, valor firmado, persistencia) y `VOLUME_ACK=31` devuelve cuatro
+(estado, nivel vivo, nivel de restauración, nivel guardado). Las solicitudes UDP
+se serializan con reintentos del mismo identificador, cada 150 ms durante hasta
+2 segundos. CORE repite el ACK del último comando sin reaplicarlo y descarta
+secuencias anteriores. No se reutilizan estos reintentos para otro comando.
+
+Sólo `status=confirmed` confirma el resultado. Un timeout devuelve
+`volume_not_confirmed` y `status=unknown`, sin repetir automáticamente la acción
+por WebSocket. Si falla NVS, `volume_save_failed` incluye `applied=true` y el nivel
+temporal aplicado. Los errores se integran en los diagnósticos MCP existentes.
+La operación no promete latencia cero: puede quedar audio previo en DMA.
+
+Actualizar primero el backend y luego CORE: el backend nuevo acepta firmware
+anterior y devuelve `volume_unsupported`; servidores antiguos rechazan la nueva
+capacidad HELLO del firmware actualizado. Las pruebas offline cubren transporte
+local real stdio/WebSocket, validación, fallos, duplicados y compatibilidad binaria
+Python/C++. La comprensión de voz y el resultado audible requieren validar el
+despliegue con Gemini y la placa; este cambio no realiza ese despliegue.
+
+Con `PIUU_LOG_LEVEL=INFO`, `DEVICE_WS_READY/CONNECTED/CLOSED/REJECTED/ERROR/RESULT`
+permiten seguir el gateway y sus fases de error; `DEVICE_CLIENT_CONNECTED/ERROR/CANCELLED`
+aparecen por stderr del MCP. `DEVICE_VOLUME_STARTED/SEND/RETRY/FINISHED/CANCELLED`
+correlacionan el `request_id`, la identidad UDP, la secuencia y los intentos.
+También siguen disponibles `MCP_TOOL_STARTED/FINISHED`. Se registran códigos y
+tipos de excepción de una lista segura, no su texto, tokens, argumentos ni
+payloads. Sólo se incluyen identificadores WebSocket con formato hexadecimal
+generado por el cliente; identificadores arbitrarios no se copian a los logs.
+
+Se capturan errores inesperados en el límite de las herramientas, cliente,
+gateway y transacción UDP. `device_transport_error` o `device_internal_error`
+con resultado `unknown` no autorizan a repetir un ajuste; podría haberse aplicado
+antes del fallo. Un fallo al abrir el puerto genera `DEVICE_WS_ERROR` con
+`phase=startup` y detiene el arranque, en lugar de ofrecer un MCP sin servicio.
+Un fallo de NVS se clasifica como `error_kind=storage` y conserva `applied=true`.
+Los logs de CORE se controlan independientemente con `PIUU_VOLUME_DIAGNOSTICS`.
