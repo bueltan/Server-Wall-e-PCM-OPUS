@@ -98,6 +98,8 @@ class GeminiLive:
             'realtimeInputConfig': {'automaticActivityDetection': {'disabled': False},
                                     'activityHandling': 'START_OF_ACTIVITY_INTERRUPTS'},
             'inputAudioTranscription': {}, 'outputAudioTranscription': {},
+            # Keep long-lived standby conversations within the model context budget.
+            'contextWindowCompression': {'slidingWindow': {}},
         }
         if self.config.expression_tools_enabled:
             schema = tool_schema()

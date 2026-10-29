@@ -1,5 +1,27 @@
 # PIUU CORE ↔ Gemini Live / xAI Voice bridge
 
+## Sesión conservada mientras CORE espera (2026-10-29)
+
+El firmware CORE actualizado pausa el audio tras 20 segundos sin habla y mantiene
+la misma conversación. Wake o MIC reactivan el envío; 15 minutos en espera sin
+activación cierran la sesión. Los contadores locales se pausan mientras no responde
+el enlace, sin eliminar los timeouts definitivos. Ver
+[comportamiento y configuración de CORE](../PIUU_CORE/README.md#espera-sin-audio-y-cierre-por-inactividad-2026-10-29).
+
+PIUU_SERVER ya conserva el proveedor con PING de CORE aunque no llegue PCM: no
+fabrica audio periódico durante esa espera. Se habilita `contextWindowCompression`
+con ventana deslizante para limitar el historial de Gemini; puede descartar detalles
+antiguos. La sesión WebSocket sigue sujeta a los límites de Google: `GoAway`, un
+error del proveedor o un timeout definitivo cierran la conversación y la siguiente
+activación abre una nueva. La reanudación transparente de Gemini no está implementada.
+Los avisos proactivos de Calendar todavía requieren una conversación libre, por
+lo que una conversación en Standby continúa aplazándolos.
+
+Validación: 216 pruebas backend offline aprobadas, incluida media hora simulada
+sin PCM con heartbeats y reanudación del mismo turno sin reconectar el proveedor.
+No se desplegó el backend ni se cargó firmware. Referencia:
+[gestión de sesiones de Gemini](https://ai.google.dev/gemini-api/docs/live-api/session-management).
+
 ## Autorización conjunta de Google
 
 [GOOGLE_AUTH.md](GOOGLE_AUTH.md) reúne los ocho permisos acordados de Gmail,

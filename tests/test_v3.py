@@ -4,6 +4,7 @@ import base64
 import json
 import struct
 import unittest
+from unittest.mock import patch
 from dataclasses import replace
 from bridge.config import BridgeConfig
 from bridge.conversation.session import ContinuousSession
@@ -111,6 +112,28 @@ class SessionTests(unittest.IsolatedAsyncioTestCase):
                 'item_id':'item-'+name,'delta':base64.b64encode(bytes(640)).decode()})
         await self.s.xai.handle_event({'type':'response.done','response':{'id':name,'status':'completed'}})
         return token
+
+    async def test_standby_heartbeats_preserve_provider_without_audio_and_resume_same_turn(self):
+        import time
+        baseline=time.monotonic()
+        before_calls=len(self.provider.calls)
+        # No PCM is sent for 30 simulated minutes. Valid heartbeats alone keep
+        # the coordinator/provider alive and must not manufacture audio appends.
+        for delta in range(0,1801,3):
+            now=baseline+delta
+            with patch('bridge.conversation.session.time.monotonic',return_value=now):
+                self.deliver(Kind.PING,Identity(self.i.client,self.i.server,0,0))
+                await self.s.check_timeouts(now)
+            self.assertEqual(self.s.conversation.identity,self.i)
+        await settle()
+        self.assertEqual(self.connects,1)
+        self.assertFalse(self.provider.closed)
+        self.assertEqual(len(self.provider.calls),before_calls)
+        self.deliver(Kind.PCM,self.i,0,self.s.pcm_packet_format.pack_audio_packet(0,0,320,bytes(640)))
+        await settle()
+        self.assertEqual(self.connects,1)
+        self.assertEqual(self.s.conversation.identity,self.i)
+        self.assertTrue(any(p.get('type')=='input_audio_buffer.append' for p in self.provider.calls))
 
     async def test_unconfirmed_end_fails_instead_of_reporting_played(self):
         token=await self.response();await self.ack_events();await settle()

@@ -80,6 +80,7 @@ class GeminiTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(await g.send_audio_append(bytes(640)))
         setup = json.loads(ws.send.call_args.args[0])['setup']
         self.assertEqual(setup['model'], 'models/gemini-3.8-live')
+        self.assertEqual(setup['contextWindowCompression'], {'slidingWindow': {}})
         self.assertNotIn('thinkingConfig', setup['generationConfig'])
         self.assertEqual(setup['tools'][0]['functionDeclarations'][0]['behavior'], 'BLOCKING')
         await g.handle_event({'setupComplete': {}})

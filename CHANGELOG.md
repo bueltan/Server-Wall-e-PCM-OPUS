@@ -2,6 +2,9 @@
 
 ## 2026-10-29
 
+- Enable Gemini sliding-window context compression for conversations retained while CORE microphone input is in standby; preserve existing error/GoAway closure handling without claiming transparent session resumption.
+- Pass all 216 backend tests, including 30 simulated minutes of valid CORE heartbeats without PCM, no manufactured provider input, and same-turn audio resumption without reopening the provider. Document CORE's 20-second microphone standby, 15-minute idle closure and provider/Calendar notification limitations. Deployment and live validation remain pending.
+
 - Add a single desktop OAuth helper for the eight agreed Gmail, Contacts, Calendar, Tasks and drive.file scopes, with private atomic storage in a new shared token file.
 - Reject incomplete consent or missing refresh tokens before replacing the shared token; preserve existing service tokens and stored grants during refresh.
 - Add offline scope checking and document API activation, PC consent, atomic VPS token transfer and shared Gmail/Calendar service configuration in GOOGLE_AUTH.md, README and integration guides. Tasks/Drive/Docs/Sheets tools remain pending.
