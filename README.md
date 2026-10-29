@@ -1,5 +1,15 @@
 # PIUU CORE ↔ Gemini Live / xAI Voice bridge
 
+## Autorización conjunta de Google
+
+[GOOGLE_AUTH.md](GOOGLE_AUTH.md) reúne los ocho permisos acordados de Gmail,
+Contactos, Calendar, Tasks y `drive.file` para Drive, Docs y Sheets. El helper
+`python -m bridge.mcp_servers.google_auth --auth` abre un consentimiento único
+en la PC y guarda `.secrets/google-token.json`; Gmail y Calendar pueden compartirlo.
+La guía incluye APIs, copia al VPS y variables de `walle.service`. Tasks, Drive,
+Docs y Sheets quedan autorizados para futuras herramientas, todavía pendientes.
+Se verificaron 215 pruebas backend offline; el consentimiento real queda por hacer.
+
 ## Entorno Python y dependencias
 
 Ejecutar estos comandos desde `PIUU_SERVER`. El entorno virtual se llama `.venv`;
@@ -729,6 +739,10 @@ las herramientas y las expone a Gemini con el prefijo `gmail_`:
 - `gmail_search_messages`: búsqueda con sintaxis Gmail, metadatos y paginación.
 - `gmail_read_message`: lectura del cuerpo de texto plano y metadatos.
 - `gmail_send_message(to, subject, body)`: envío de texto plano a una dirección.
+- `gmail_search_contacts` y `gmail_get_contact`: buscar y consultar contactos guardados
+  mediante People API, con nombres, correos y teléfonos.
+- `gmail_create_contact`: guardar un nuevo contacto con nombre y correo o teléfono,
+  sin enviar email ni modificar contactos existentes.
 
 Las herramientas Gmail usan `NON_BLOCKING` y resultados `WHEN_IDLE`; las consultas
 pendientes sobreviven al cierre de un turno de audio. La herramienta de
@@ -749,11 +763,48 @@ export PIUU_GMAIL_MCP_ENABLED=1
 El inicio requiere también `GEMINI_API_KEY`, como se describe en la sección de
 Gemini Live. OAuth solicita `gmail.readonly` y `gmail.send`. Si había un token de
 solo lectura, volver a ejecutar `--auth` para conceder el permiso de envío.
-Gmail permanece desactivado por defecto; Calendar y Home MCP quedan pendientes.
+Para contactos, habilitar además People API y repetir `--auth`: se solicita
+`contacts` para leer y crear. Copiar el token actualizado al VPS. El token anterior
+mantiene el correo operativo; un token con `contacts.readonly` conserva las
+búsquedas y solo necesita ampliar el permiso para crear. Las personas
+o direcciones ambiguas se consultan con el usuario antes de enviar. La suite con
+contactos pasó **209 pruebas**; todavía falta autorizar el permiso adicional y
+validarlo con la cuenta real.
+Gmail permanece desactivado por defecto. Calendar está implementado como integración
+opcional independiente; Home MCP queda pendiente.
 
 Validación: **173 pruebas backend pasaron**, incluidos intercambios MCP reales por
-stdio y pruebas de envío con API simulada. No se enviaron correos reales; falta
-configurar las credenciales, autorizar la cuenta y probar Gmail en vivo.
+stdio y pruebas de envío con API simulada. La autorización se realizó en la PC
+y el token se copió al VPS; se verificaron propietario `denis` y permisos `600`
+para credenciales y token, y `700` para `.secrets/`. Después de habilitar Gmail API,
+el usuario confirmó que Gmail funciona desde PIUU. Las pruebas automatizadas no
+envían correos reales.
 
 Instalación, autorización, límites y ejemplo de envío por voz en
-[GMAIL_MCP.md](GMAIL_MCP.md).
+[GMAIL_MCP.md](GMAIL_MCP.md). Para el VPS en `/home/denis/apps/Server-Wall-e-PCM-OPUS`,
+ver [autorización desde la PC y copia del token](GMAIL_MCP.md#servidor-vps-ruta-y-autorización-desde-la-pc).
+
+
+## Google Calendar MCP y avisos (2026-10-29)
+
+El Tool Manager integra Gmail y Calendar por stdio con herramientas `NON_BLOCKING`.
+Calendar permite listar calendarios, buscar o leer eventos, comprobar disponibilidad
+y crear eventos con horario o de día completo. Reutiliza el cliente OAuth Desktop
+con un token propio `.secrets/calendar-token.json`; requiere habilitar Calendar API.
+Activar con `PIUU_CALENDAR_MCP_ENABLED=1`.
+
+Los avisos opcionales (`PIUU_CALENDAR_REMINDERS_ENABLED=1`) consultan un calendario
+cada 120 segundos y un temporizador local dispara el recordatorio diez minutos
+antes. Se aplica espera progresiva ante fallos y se persisten marcas para no repetir
+intentos después de reiniciar. CORE ocupado difiere el aviso hasta antes del inicio
+del evento. La extensión negociada `CAP_NOTIFICATIONS=0x0010`, `NOTICE=28` y START
+correlacionado abre la sesión de Gemini sin wake del usuario; requiere firmware CORE
+nuevo. La consulta de Calendar por voz no requiere esta extensión.
+
+Instrucciones de autorización en la PC, copia al VPS, entorno Python real de
+`walle.service`, variables, límites y futura migración a webhooks en
+[CALENDAR_MCP.md](CALENDAR_MCP.md). Calendar y los avisos aún requieren despliegue,
+autorización y prueba con hardware; no se crearon eventos reales en esta implementación.
+
+Validación de Calendar y avisos: **197 pruebas backend**, tests host de CORE e
+interoperabilidad Python/C++ pasaron; firmware `cyd-uart0` compilado correctamente.

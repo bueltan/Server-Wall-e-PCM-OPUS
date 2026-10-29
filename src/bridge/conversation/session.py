@@ -4,10 +4,11 @@ import secrets
 import math
 import struct
 import time
+from zoneinfo import ZoneInfo
 from bridge.audio.pipeline import AudioPipeline
 from bridge.transport.downlink_recovery import DownlinkRecovery
 from bridge.conversation.state import Conversation
-from bridge.transport.protocols.conversation import Identity, Packet, Kind, Event, encode, decode, CAP_EYES_PLAN, CAP_DEVICE_MAC
+from bridge.transport.protocols.conversation import Identity, Packet, Kind, Event, encode, decode, CAP_EYES_PLAN, CAP_DEVICE_MAC, CAP_NOTIFICATIONS
 from bridge.expressions.delivery import EyePlanDelivery
 from bridge.transport.reliable_events import ReliableEvents
 from bridge.providers import create_provider
@@ -51,6 +52,10 @@ class ContinuousSession(AudioPipeline):
         self.eye_plans = EyePlanDelivery(self._wire)
         self.peer_eye_offer = None
         self.eyes_capable = False
+        self.notifications_capable = False
+        self.notification_offer = None
+        self.pending_notice = None
+        self.next_notice = 0
 
     def new_input(self):
         self.provider_input=ProviderInput(self.config,self._accept_audio,self.xai.wait_input_ready)
@@ -89,7 +94,7 @@ class ContinuousSession(AudioPipeline):
     def datagram_received(self, data, addr):
         try: p = decode(data)
         except (ValueError, struct.error): self.counters['invalid'] += 1; return
-        allowed_flags = CAP_EYES_PLAN | CAP_DEVICE_MAC if p.kind == Kind.HELLO else 0
+        allowed_flags = CAP_EYES_PLAN | CAP_DEVICE_MAC | CAP_NOTIFICATIONS if p.kind == Kind.HELLO else 0
         if p.flags & ~allowed_flags or not p.identity.client: self.counters['invalid'] += 1; return
         if p.kind == Kind.HELLO:
             new_peer = self.client_nonce is None or p.identity.client != self.client_nonce
@@ -126,13 +131,16 @@ class ContinuousSession(AudioPipeline):
                       old_peer=old_addr, peer=addr, client=f'{self.client_nonce:016x}')
             offered = bool(p.flags & CAP_EYES_PLAN)
             if new_peer:
+                self.notification_offer = bool(p.flags & CAP_NOTIFICATIONS)
+                self.notifications_capable = (self.notification_offer and self.config.calendar_reminders_enabled
+                                              and self.config.voice_provider == 'gemini')
                 self.peer_eye_offer = offered
                 self.eyes_capable = offered and self.config.expression_udp_enabled
                 self.eye_plans.reset()
-            elif offered != self.peer_eye_offer:
+            elif offered != self.peer_eye_offer or bool(p.flags & CAP_NOTIFICATIONS) != self.notification_offer:
                 self.counters['invalid'] += 1; return  # Capabilities are fixed for a client nonce.
             self.last_peer_seen=time.monotonic()
-            capabilities = (CAP_EYES_PLAN if self.eyes_capable else 0) | (CAP_DEVICE_MAC if mac else 0)
+            capabilities = (CAP_NOTIFICATIONS if self.notifications_capable else 0) | (CAP_EYES_PLAN if self.eyes_capable else 0) | (CAP_DEVICE_MAC if mac else 0)
             self._send(Kind.HELLO_ACK, Identity(self.client_nonce,self.server_nonce,0,0),p.sequence,flags=2|capabilities|int(self.ready()))
             return
         if addr != self.remote_addr or p.identity.client != self.client_nonce:
@@ -150,7 +158,7 @@ class ContinuousSession(AudioPipeline):
             return
         if p.kind in (Kind.START,Kind.CANCEL,Kind.INTERRUPT,Kind.PLAYED):
             if not p.identity.turn: return
-            if (p.kind == Kind.START and (p.body or p.identity.response)) or (p.kind != Kind.START and len(p.body)!=4): return
+            if (p.kind == Kind.START and (len(p.body) not in (0, 4) or p.identity.response)) or (p.kind != Kind.START and len(p.body)!=4): return
             if p.kind == Kind.START or (current and p.identity.turn == current.turn):
                 self.last_peer_seen=time.monotonic()
             key = (p.kind,p.identity.turn,p.sequence)
@@ -251,6 +259,37 @@ class ContinuousSession(AudioPipeline):
             if self.output_valid(token): self.output_gate.set()
         except asyncio.CancelledError: pass
 
+    async def deliver_notification(self, reminder, claim):
+        if (not self.notifications_capable or not self.ready() or self.conversation.identity
+                or self.pending_notice or not self.client_nonce
+                or time.monotonic() - self.last_peer_seen >= self.config.core_disconnect_timeout_sec):
+            return False
+        self.next_notice += 1
+        if self.next_notice > 0xffffffff:
+            return False  # New server nonce is required before sequence wrap.
+        future = asyncio.get_running_loop().create_future()
+        notice = {'sequence': self.next_notice, 'reminder': reminder, 'claim': claim,
+                  'future': future, 'identity': None}
+        self.pending_notice = notice
+        deadline = time.monotonic() + self.config.provider_open_timeout_sec + 5
+        event('NOTICE_OFFERED', request=self.next_notice)
+        try:
+            while self.pending_notice is notice and not future.done() and time.monotonic() < deadline:
+                if notice['identity'] is None:
+                    self._send(Kind.NOTICE, Identity(self.client_nonce, self.server_nonce, 0, 0), self.next_notice)
+                try:
+                    return await asyncio.wait_for(asyncio.shield(future), .25)
+                except TimeoutError:
+                    pass
+            return future.result() if future.done() else False
+        finally:
+            if self.pending_notice is notice:
+                self.pending_notice = None
+                if notice['identity'] is not None and self.conversation.identity == notice['identity'] and not future.done():
+                    self.schedule(self.fail('notification_timeout'))
+            if not future.done():
+                future.cancel()
+
     async def run_controls(self):
         while True:
             p = await self.controls.get()
@@ -258,8 +297,18 @@ class ContinuousSession(AudioPipeline):
                 if self.peer_resetting:
                     self.ack(p,False); continue
                 if p.kind == Kind.START:
+                    notice = self.pending_notice
+                    if p.body:
+                        if (not self.notifications_capable or notice is None or
+                                int.from_bytes(p.body, 'big') != notice['sequence'] or notice['future'].done()):
+                            self.ack(p, False); continue
                     if self.conversation.identity or p.identity.turn <= self.last_conversation or not self.ready():
                         self.ack(p,False); continue
+                    if p.body:
+                        notice['identity'] = p.identity
+                    elif notice is not None:
+                        if not notice['future'].done(): notice['future'].set_result(False)
+                        self.pending_notice = None  # Manual START wins the race.
                     self.conversation.open(p.identity); self.last_conversation=p.identity.turn
                     self.last_activity=time.monotonic()
                     self.events.reset(); self.startup.clear(); self.input_live=False
@@ -310,6 +359,10 @@ class ContinuousSession(AudioPipeline):
 
     async def close_remote(self, token, played):
         self.closing=True
+        notice = self.pending_notice
+        if notice is not None and notice['identity'] == token:
+            if not notice['future'].done(): notice['future'].set_result(False)
+            self.pending_notice = None
         self.conversation.close(); self.input.close(); self.provider_input.close(); self.input_live=False
         self.eye_plans.reset()  # Before awaiting history/input/provider cleanup.
         self.startup.clear(); self.events.reset()
@@ -357,6 +410,15 @@ class ContinuousSession(AudioPipeline):
             if self.conversation.identity!=token: return
             event('PROVIDER_READY',token,startup_frames=len(self.startup.pending),startup_dropped=self.startup.dropped)
             await self.notify(Event.READY)
+            notice = self.pending_notice
+            if notice is not None and notice['identity'] == token:
+                if notice['future'].done() or not notice['claim'](notice['reminder']):
+                    raise RuntimeError('notification_no_longer_due')
+                # Claim is durable before sending: uncertain sends are not replayed.
+                await self.xai.send_notification(notice['reminder'].message(ZoneInfo(self.config.calendar_time_zone)))
+                notice['future'].set_result(True)
+                self.pending_notice = None
+                event('NOTICE_SUBMITTED', token, request=notice['sequence'])
             self.provider_input.start(token)
             self.input.start()
             # Drain without flooding the normal 16-frame ingress queue. New PCM

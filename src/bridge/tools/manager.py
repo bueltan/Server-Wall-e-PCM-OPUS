@@ -6,6 +6,7 @@ import sys
 from contextlib import AsyncExitStack
 from dataclasses import dataclass
 from pathlib import Path
+from bridge.diagnostics.logging import event
 
 
 @dataclass(frozen=True)
@@ -16,14 +17,23 @@ class ServerSpec:
     env: dict[str, str]
 
 
-def gmail_server_spec():
-    # Do not pass Gemini/xAI credentials to the Gmail subprocess.
+def google_server_spec(name, extra_env=None):
+    # Each subprocess gets only its own Google integration settings, never API keys.
+    prefix = 'PIUU_' + name.upper() + '_'
     env = {key: value for key, value in os.environ.items()
            if key in ('PATH', 'HOME', 'LANG', 'SSL_CERT_FILE', 'SSL_CERT_DIR')
-           or key.startswith('PIUU_GMAIL_')}
+           or key.startswith(prefix)}
     env['PYTHONPATH'] = str(Path(__file__).resolve().parents[2])
-    return ServerSpec('gmail', sys.executable,
-                      ('-m', 'bridge.mcp_servers.gmail'), env)
+    env.update(extra_env or {})
+    return ServerSpec(name, sys.executable, ('-m', 'bridge.mcp_servers.' + name), env)
+
+
+def gmail_server_spec():
+    return google_server_spec('gmail')
+
+
+def calendar_server_spec(time_zone=None):
+    return google_server_spec('calendar', {'PIUU_CALENDAR_TIME_ZONE': time_zone} if time_zone else None)
 
 
 class ToolManager:
@@ -73,11 +83,14 @@ class ToolManager:
                         cursor = page.nextCursor
                         if not cursor:
                             break
+                    event('MCP_SERVER_READY', server=spec.name,
+                          tools=sum(name.startswith(spec.name + '_') for name in self.routes))
                 self.ready.set_result(None)
                 while True:
                     name, args, future = await self.queue.get()
                     if future.cancelled():
                         continue
+                    event('MCP_TOOL_STARTED', tool=name)
                     try:
                         session, remote_name = self.routes[name]
                         result = await asyncio.wait_for(session.call_tool(remote_name, args), self.timeout)
@@ -98,6 +111,10 @@ class ToolManager:
                         payload = {'ok': False, 'error': 'tool_timeout'}
                     except Exception:
                         payload = {'ok': False, 'error': 'tool_unavailable'}
+                    data = payload.get('data')
+                    event('MCP_TOOL_FINISHED', tool=name, ok=payload['ok'],
+                          error=payload.get('error') or (data.get('error') if isinstance(data, dict) else None),
+                          status=data.get('status') if isinstance(data, dict) else None)
                     if not future.done():
                         future.set_result(payload)
         except asyncio.CancelledError:

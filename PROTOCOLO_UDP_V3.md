@@ -174,3 +174,30 @@ y nueva. La recepción de CORE reintenta el datagrama pendiente si falla el mute
 entre parse y read; descarta enteros los datagramas sobredimensionados o leídos
 parcialmente. Esa corrección local no modifica el contrato UDP ni agrega buffers;
 su validación durante microcortes WiFi reales sigue pendiente.
+
+
+## Avisos proactivos opcionales (2026-10-29)
+
+`CAP_NOTIFICATIONS=0x0010` se ofrece en HELLO y se acepta en HELLO_ACK solo si
+el backend tiene habilitados los avisos Calendar con Gemini. No modifica el sobre
+PIU3 ni los formatos de audio. Un CORE anterior conserva el funcionamiento por voz.
+
+`NOTICE=28`: backend → CORE, flags=0, identidad de sesión `(client, server, 0, 0)`,
+sequence uint32 no nulo y cuerpo vacío. Solo se acepta con capacidad negociada,
+servidor admitido y CORE inactivo. Los duplicados o números anteriores no abren
+otra conversación; un aviso mientras CORE está ocupado se ignora para que el
+backend lo difiera.
+
+CORE elige un nuevo turn y envía START con cuerpo uint32 big-endian que copia la
+sequence de NOTICE. El backend solo admite ese cuerpo si corresponde a una oferta
+pendiente en la misma sesión. START manual mantiene cuerpo vacío y gana si compite
+con el aviso. START_ACK conserva su formato y deduplicación. READY y su EVENT_ACK
+preceden a la entrada de texto del recordatorio en Gemini y al audio Opus normal.
+CORE silencia el micrófono durante la apertura del aviso y lo retoma después del
+playback con la protección de eco habitual; sin respuesta inicial aborta a los
+20 segundos. No hay payload de evento ni secretos en NOTICE.
+
+La persistencia y planificación corresponden al backend; no se promete exactamente
+una reproducción ante reinicios o fallos de red. Las marcas persistidas registran
+un intento antes de enviar el texto a Gemini. Actualizar backend y firmware CORE
+para usar la capacidad. Ver CALENDAR_MCP.md en PIUU_SERVER para la configuración.

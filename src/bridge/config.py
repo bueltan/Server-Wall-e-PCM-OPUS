@@ -1,4 +1,5 @@
 import os
+from pathlib import Path
 from dataclasses import dataclass, field
 from typing import Optional
 
@@ -41,6 +42,13 @@ class BridgeConfig:
         "o confirmaciones. Adapta el tono al contexto sin exagerar emociones."
     )
     gmail_mcp_enabled: bool = field(default_factory=lambda: os.getenv("PIUU_GMAIL_MCP_ENABLED", "0").lower() in ("1", "true", "yes"))
+    calendar_mcp_enabled: bool = field(default_factory=lambda: os.getenv("PIUU_CALENDAR_MCP_ENABLED", "0").lower() in ("1", "true", "yes"))
+    calendar_time_zone: str = field(default_factory=lambda: os.getenv("PIUU_CALENDAR_TIME_ZONE", "America/Argentina/Buenos_Aires"))
+    calendar_reminders_enabled: bool = field(default_factory=lambda: os.getenv("PIUU_CALENDAR_REMINDERS_ENABLED", "0").lower() in ("1", "true", "yes"))
+    calendar_poll_sec: float = field(default_factory=lambda: float(os.getenv("PIUU_CALENDAR_POLL_SEC", "120")))
+    calendar_reminder_minutes: int = field(default_factory=lambda: int(os.getenv("PIUU_CALENDAR_REMINDER_MINUTES", "10")))
+    calendar_reminder_calendar: str = field(default_factory=lambda: os.getenv("PIUU_CALENDAR_REMINDER_CALENDAR", "primary"))
+    calendar_reminder_state: str = field(default_factory=lambda: os.getenv("PIUU_CALENDAR_REMINDER_STATE", str(Path(__file__).resolve().parents[2] / '.state/calendar-reminders.json')))
     tool_timeout_sec: float = 15.0
 
     # Continuous v3 provider tool and optional capability-negotiated visual transport.

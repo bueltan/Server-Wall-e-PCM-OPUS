@@ -2,13 +2,38 @@
 
 ## 2026-10-29
 
+- Add a single desktop OAuth helper for the eight agreed Gmail, Contacts, Calendar, Tasks and drive.file scopes, with private atomic storage in a new shared token file.
+- Reject incomplete consent or missing refresh tokens before replacing the shared token; preserve existing service tokens and stored grants during refresh.
+- Add offline scope checking and document API activation, PC consent, atomic VPS token transfer and shared Gmail/Calendar service configuration in GOOGLE_AUTH.md, README and integration guides. Tasks/Drive/Docs/Sheets tools remain pending.
+- Pass all 215 backend tests, including shared-token compatibility, incomplete consent, absent refresh tokens and sanitized errors. No live authorization, deployment or Google writes were performed for this preparation.
+
+- Add gmail_create_contact for explicit user requests with a name plus email and/or phone; serialize People API mutations, disable automatic retries and protect cancelled tool IDs from duplicate creation.
+- Request the contacts write scope on Gmail OAuth authorization while preserving Gmail-only email access and contacts.readonly lookup grants. No contact update/delete tools or email sending are part of contact creation.
+- Pass all 209 backend tests, including contact creation payloads, input validation, uncertain outcomes, cancellation deduplication and old read-only token compatibility. Document new consent and VPS token replacement; no real contacts were created.
+
+- Add read-only Google Contacts lookup to Gmail MCP through People API: gmail_search_contacts and gmail_get_contact return saved-contact names, email labels/addresses and phone numbers.
+- Extend Gmail OAuth authorization with contacts.readonly while preserving existing Gmail-only tokens for email operations; require new consent only for contact access and keep Calendar tokens independent.
+- Warm the People search cache before prefix queries, bound search results and expose fixed auth/API diagnostic codes. Instruct Gemini to resolve named recipients through contacts and ask about ambiguous people or addresses before sending.
+- Pass all 203 backend tests, including saved-contact lookup, cache warmup, read-only MCP annotations and compatibility with Gmail-only tokens. Document People API activation, local OAuth renewal and VPS token transfer; real-contact validation remains pending.
+
+- Pass all 197 backend tests, CORE host tests and Python/C++ notification wire interoperability; compile cyd-uart0 successfully without flashing hardware.
+- Integrate an optional PIUU Calendar MCP server alongside Gmail: calendar/event discovery, FreeBusy availability and timed/all-day event creation with explicit time zones, pagination and uncertain-write reconciliation IDs.
+- Share OAuth helpers while keeping independent Gmail/Calendar tokens and scopes; add fixed diagnostic codes and tool lifecycle logs without argument or credential logging.
+- Add opt-in Calendar reminders ten minutes before timed events, with 120-second polling, local scheduling, quota-error backoff, stale-cache suppression and durable attempt deduplication.
+- Negotiate optional UDP v3 CAP_NOTIFICATIONS=0x0010 and NOTICE=28; CORE owns the correlated START, stays muted until playback, defers notices while busy and bounds the initial response wait. Voice Calendar tools remain compatible with earlier CORE firmware.
+- Document Calendar OAuth, the VPS service's /home/denis/apps/.venv interpreter, deployment and future HTTPS webhooks. User confirmed Gmail working after enabling Gmail API; Calendar live authorization/deployment and hardware notice validation remain pending.
+
+- Copy the locally authorized Gmail token to the VPS over SCP; verify the nonempty token, denis ownership, 600 credential/token permissions and 700 .secrets directory permissions. Gmail was later confirmed working by the user after enabling its API.
+
+- Document the confirmed VPS path /home/denis/apps/Server-Wall-e-PCM-OPUS, local OAuth authorization, credential/token transfer over SSH and systemd environment settings.
+
 - Add a PIUU-owned Gmail MCP server over stdio and a provider-independent Tool Manager with tool discovery, prefixed routing, bounded queues and call timeouts.
 - Integrate Gmail search, message reading and plain-text email sending into Gemini Live using explicit NON_BLOCKING declarations and WHEN_IDLE results; keep expression preparation BLOCKING.
 - Preserve pending calls across audio turns, handle tool cancellation and deduplicate call IDs; retain cancelled-send markers and disable automatic send retries to avoid duplicate messages after uncertain outcomes.
 - Add Google OAuth desktop authorization with gmail.readonly and gmail.send scopes, automatic token refresh, private token files and detection of old read-only tokens requiring new consent.
 - Add optional src/requirements-mcp.txt dependencies; verify the existing Python 3.12 .venv, package consistency and project imports.
-- Document environment setup, Gmail activation, OAuth reauthorization and manual send testing in README.md and GMAIL_MCP.md. Calendar and Home MCP servers remain pending.
-- Pass all 173 backend tests, including real local MCP stdio exchanges, MIME encoding, send validation, OAuth scope migration and cancellation regressions. No real email was sent; account authorization and live Gmail validation remain pending.
+- Document environment setup, Gmail activation, OAuth reauthorization and manual send testing in README.md and GMAIL_MCP.md. Home MCP remains pending; Calendar is documented separately.
+- Pass all 173 backend tests, including real local MCP stdio exchanges, MIME encoding, send validation, OAuth scope migration and cancellation regressions. These offline tests did not send real email.
 
 ## 2026-10-28
 

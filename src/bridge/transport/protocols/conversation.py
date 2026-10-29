@@ -10,6 +10,7 @@ VERSION = 3
 HEADER = struct.Struct('!4sBBHQQIIIH')
 MAX_BODY = 658
 CAP_EYES_PLAN = 0x0004  # Optional HELLO offer / HELLO_ACK acceptance.
+CAP_NOTIFICATIONS = 0x0010  # Optional idle wake; correlated START carries request ID.
 CAP_DEVICE_MAC = 0x0008  # HELLO body: six raw station-MAC bytes; ACK confirms binding.
 
 class Kind(IntEnum):
@@ -40,6 +41,7 @@ class Kind(IntEnum):
     EYES=25  # Existing immediate ASCII command, reserved here; no automatic fallback.
     EYES_PLAN=26
     EYES_PLAN_ACK=27
+    NOTICE=28  # Session-level empty wake request; CORE owns the new turn ID.
 
 @dataclass(frozen=True)
 class Identity:

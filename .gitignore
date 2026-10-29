@@ -6,3 +6,4 @@ recordings/
 .env
 credentials.json
 token.json
+.state/
