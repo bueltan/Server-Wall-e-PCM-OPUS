@@ -29,7 +29,7 @@ def create_server(client=None):
     @server.tool(annotations=write)
     async def execute(project: Key, instruction: Instruction, idempotency_key: Key,
                       mode: Literal['autonomous'] = 'autonomous') -> dict:
-        """Queue a user's development request. Use the SAME unique key on retries.
+        """Queue a user's coding or file task in an authorized workspace. Use the SAME unique key on retries.
         Only authorized projects. Never flash, deploy, commit or push.
         """
         return await client.call('execute', dict(project=project, instruction=instruction,

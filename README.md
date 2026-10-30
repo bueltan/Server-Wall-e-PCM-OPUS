@@ -978,7 +978,8 @@ Los logs de CORE se controlan independientemente con `PIUU_VOLUME_DIAGNOSTICS`.
 
 ## Agente Codex remoto (opcional)
 
-PIUU puede asignar tareas de desarrollo por MCP a una ThinkPad con Codex sin
+PIUU puede asignar tareas de desarrollo o trabajo con archivos en carpetas autorizadas
+por MCP a una ThinkPad con Codex sin
 VS Code, consultar progreso/resultados, cancelar y continuar contexto. La
 conectividad usa SSH inverso y un gateway local autenticado, con cola SQLite,
 idempotencia, perfiles de permisos y recuperación conservadora. Solo Gemini;
@@ -990,3 +991,8 @@ PlatformIO, llamadas MCP, eventos sin audio y diagnóstico. Configuración de ej
 en `.env.example` y `scripts/codex-projects.example.json`. Las tareas no hacen
 commits, push, despliegues ni flashing. Un resultado de prueba desconocido es
 `null`; no se comunica como éxito.
+
+El registro local admite `excluded_paths` para bloquear subcarpetas y archivos
+relativos a cada raíz. Esto permite habilitar Documents, Downloads o Music con
+lectura/escritura sin exponer el bridge que administra sus permisos. Las raíces
+superpuestas se ejecutan en serie, incluso si se aumenta la concurrencia.

@@ -152,6 +152,21 @@ class TaskTests(Fixture):
         with self.assertRaisesRegex(PolicyError, 'session_not_ready'):
             await self.manager.dispatch('continue', dict(task_id=task['task_id'], instruction='next', idempotency_key='next'))
 
+    async def test_parent_and_child_workspaces_are_serialized(self):
+        data = json.loads(self.registry_path.read_text())
+        data['projects'].append(dict(id='parent', name='Parent', path=str(self.root)))
+        self.registry_path.write_text(json.dumps(data))
+        self.manager.registry = Registry(self.registry_path)
+        self.manager.concurrency = 2
+        first = await self.enqueue()
+        parent = await self.manager.dispatch('execute', dict(project='parent', instruction='Work', idempotency_key='parent'))
+        self.manager.start()
+        await self.wait_status(first['task_id'], 'running')
+        await asyncio.sleep(.03)
+        self.assertEqual(self.store.get(parent['task_id'])['status'], 'queued')
+        self.adapter.release.set()
+        await self.wait_status(parent['task_id'], 'completed')
+
     async def test_timeout_uncertain_not_replayed(self):
         self.manager.timeout = .02
         task = await self.enqueue()
@@ -247,6 +262,62 @@ class PolicyTests(Fixture):
         self.registry_path.write_text(json.dumps(data))
         with self.assertRaisesRegex(PolicyError, 'invalid_project_path'):
             Registry(self.registry_path)
+
+    async def test_excluded_subtree_is_denied_and_not_followed(self):
+        blocked = self.project / 'private'
+        blocked.mkdir()
+        (blocked / 'outside').symlink_to(self.root)
+        data = json.loads(self.registry_path.read_text())
+        data['projects'][0]['excluded_paths'] = ['private']
+        self.registry_path.write_text(json.dumps(data))
+        registry = Registry(self.registry_path)
+        project = registry.get('test')
+        self.assertTrue(registry.listing()['projects'][0]['available'])
+        self.assertEqual(permission_config(project)['permissions']['piuu']['filesystem'][str(blocked)], 'deny')
+        (self.project / 'private_other').symlink_to(self.root)
+        with self.assertRaisesRegex(PolicyError, 'symlink_escape'):
+            registry.get('test')
+
+    async def test_exclusions_flatten_secret_denials(self):
+        blocked = self.project / 'private'
+        blocked.mkdir()
+        (blocked / '.env.example').write_text('not public')
+        visible = self.project / 'visible'
+        visible.mkdir()
+        (visible / '.env').write_text('dummy')
+        project = Project('test', 'Test', self.project, excluded_paths=(blocked,))
+        filesystem = permission_config(project)['permissions']['piuu']['filesystem']
+        self.assertEqual(filesystem[str(blocked)], 'deny')
+        self.assertEqual(filesystem[str(visible / '.env')], 'deny')
+        self.assertNotIn(str(blocked / '.env.example'), filesystem)
+        self.assertFalse(any('**' in path for path in filesystem))
+
+    async def test_excluded_platformio_ini_is_not_read(self):
+        data = json.loads(self.registry_path.read_text())
+        data['projects'][0]['excluded_paths'] = ['platformio.ini']
+        self.registry_path.write_text(json.dumps(data))
+        self.assertEqual(Registry(self.registry_path).get('test').environments(), [])
+
+    async def test_invalid_exclusions_are_rejected(self):
+        data = json.loads(self.registry_path.read_text())
+        for excluded in (['../outside'], ['/tmp'], ['.'], ['private/*'], [''], [123], 'private'):
+            data['projects'][0]['excluded_paths'] = excluded
+            self.registry_path.write_text(json.dumps(data))
+            with self.subTest(excluded=excluded), self.assertRaisesRegex(PolicyError, 'invalid_excluded_path'):
+                Registry(self.registry_path)
+
+    async def test_overlapping_roots_are_detected(self):
+        data = json.loads(self.registry_path.read_text())
+        data['projects'].append(dict(id='parent', name='Parent', path=str(self.root)))
+        sibling = self.root / 'sibling'
+        sibling.mkdir()
+        data['projects'].append(dict(id='sibling', name='Sibling', path=str(sibling)))
+        self.registry_path.write_text(json.dumps(data))
+        registry = Registry(self.registry_path)
+        self.assertTrue(registry.overlaps('parent', 'test'))
+        self.assertTrue(registry.overlaps('test', 'parent'))
+        self.assertTrue(registry.overlaps('test', 'test'))
+        self.assertFalse(registry.overlaps('test', 'sibling'))
 
     async def test_permission_profile_is_restricted(self):
         config = permission_config(self.registry.get('test'))

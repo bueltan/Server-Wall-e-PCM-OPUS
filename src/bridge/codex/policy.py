@@ -43,23 +43,42 @@ class Project:
     name: str
     path: Path
     readable_roots: tuple[Path, ...] = ()
+    excluded_paths: tuple[Path, ...] = ()
+
+    def excludes(self, path):
+        return any(path.is_relative_to(root) for root in self.excluded_paths)
+
+    def entries(self):
+        """Traverse visible entries without following symlinks or excluded trees."""
+        pending = [str(self.path)]
+        excluded = {str(root) for root in self.excluded_paths}
+        while pending:
+            directory = pending.pop()
+            try:
+                entries = os.scandir(directory)
+            except OSError:
+                continue
+            with entries:
+                for entry in entries:
+                    if entry.path in excluded:
+                        continue
+                    yield entry
+                    if entry.is_dir(follow_symlinks=False):
+                        pending.append(entry.path)
 
     def validate(self):
-        # Compare against the configured canonical root again at dispatch time.
         if self.path.resolve(strict=True) != self.path or not self.path.is_dir():
             raise PolicyError('project_path_changed')
-        # Do not follow directory symlinks while walking. Reject escaping links,
-        # even if their target does not yet exist.
-        for directory, dirs, files in os.walk(self.path, followlinks=False):
-            for name in dirs + files:
-                entry = Path(directory) / name
-                if entry.is_symlink() and not entry.resolve().is_relative_to(self.path):
-                    raise PolicyError('project_symlink_escape')
+        for entry in self.entries():
+            if entry.is_symlink() and not Path(entry.path).resolve().is_relative_to(self.path):
+                raise PolicyError('project_symlink_escape')
         return self.path
 
     def environments(self):
         self.validate()
         ini = self.path / 'platformio.ini'
+        if self.excludes(ini) or self.excludes(ini.resolve()):
+            return []
         parser = configparser.ConfigParser(interpolation=None, strict=False)
         if ini.is_file():
             parser.read(ini)
@@ -73,7 +92,7 @@ class Registry:
             raise PolicyError('invalid_registry')
         self.projects = {}
         for item in raw['projects']:
-            if not isinstance(item, dict) or set(item) - {'id', 'name', 'path', 'readable_roots'}:
+            if not isinstance(item, dict) or set(item) - {'id', 'name', 'path', 'readable_roots', 'excluded_paths'}:
                 raise PolicyError('invalid_registry')
             key = identifier(item['id'])
             path = Path(item['path']).expanduser()
@@ -82,9 +101,17 @@ class Registry:
             roots = tuple(Path(root).expanduser() for root in item.get('readable_roots', []))
             if any(not root.is_absolute() or root.resolve(strict=True) != root or root == Path('/') for root in roots):
                 raise PolicyError('invalid_readable_root')
+            excluded = item.get('excluded_paths', [])
+            if not isinstance(excluded, list) or any(
+                    not isinstance(entry, str) or not entry or '\x00' in entry
+                    or Path(entry).is_absolute() or '..' in Path(entry).parts
+                    or not Path(entry).parts or any(char in entry for char in '*?[]')
+                    for entry in excluded):
+                raise PolicyError('invalid_excluded_path')
+            exclusions = tuple(path / entry for entry in excluded)
             if key in self.projects:
                 raise PolicyError('duplicate_project')
-            self.projects[key] = Project(key, text(item['name'], 'invalid_project_name', 100), path, roots)
+            self.projects[key] = Project(key, text(item['name'], 'invalid_project_name', 100), path, roots, exclusions)
 
     def get(self, key):
         identifier(key)
@@ -93,6 +120,14 @@ class Registry:
         project = self.projects[key]
         project.validate()
         return project
+
+    def overlaps(self, left, right):
+        if left == right:
+            return True
+        first, second = self.projects.get(left), self.projects.get(right)
+        if first is None or second is None:
+            return False
+        return first.path.is_relative_to(second.path) or second.path.is_relative_to(first.path)
 
     def listing(self):
         items = []

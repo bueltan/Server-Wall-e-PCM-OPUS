@@ -134,7 +134,7 @@ class GeminiLive:
             setup.setdefault('tools', [{'functionDeclarations': []}])[0]['functionDeclarations'].extend(declarations)
         if self.config.codex_enabled:
             setup['systemInstruction']['parts'][0]['text'] += (
-                "\nUse Codex tools only for the user's requested development work. "
+                "\nUse Codex tools only for the user's requested coding or file work. "
                 "List projects to resolve authorized project IDs. Use a unique idempotency_key "
                 "per new request and preserve it on retries after network loss. Queued means assigned, "
                 "not completed. Consult task_status/task_result; never infer success from a disconnect. "

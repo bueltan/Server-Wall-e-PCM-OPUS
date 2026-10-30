@@ -2,6 +2,11 @@
 
 ## 2026-10-30
 
+- Support explicitly authorized personal folders as Codex workspaces for coding or file tasks. Add locally configured excluded_paths that deny both reading and writing, prune excluded trees during symlink validation and avoid reading excluded PlatformIO metadata.
+- Keep the bridge control directory and external-link virtual environments excluded when authorizing Documents. Flatten secret denials outside excluded trees to avoid the installed Codex/bwrap nested-denial mount conflict; document startup snapshot behavior for those secret patterns.
+- Use scandir metadata for large-workspace validation and serialize overlapping parent/child workspace roots. Extend policy, sandbox profile and queue regression coverage; preserve existing project entries and authentication.
+- Pass all 296 local backend tests, syntax/dependency checks and real sandbox create/read/delete probes in Documents, Downloads and Music; confirm an alias into the excluded bridge remains unreadable. Personal authorization paths remain private local configuration.
+
 - Bound task-manager shutdown and use cancellation-safe timeout contexts around Codex queue/event waits on Python 3.11. Add a shutdown regression; pass all 290 local backend tests and all 31 Codex tests on the VPS runtime.
 - Verify real VPS MCP discovery, task execution, unittest results, saved-thread continuation, cancellation, automatic reverse-tunnel reconnection during an active 40-second task, persistent results and idempotent retries. Confirm completed history survives a gateway restart.
 - Record the remaining remote full-suite timeout in the pre-existing ingress coordination test, reproduced independently on baseline 7256ef2 under Python 3.11. Keep audio implementation unchanged; full local Python 3.12 suite passes.

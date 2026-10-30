@@ -11,6 +11,16 @@
       "name": "PIUU EARS",
       "path": "/absolute/path/C3_EARS",
       "readable_roots": []
+    },
+    {
+      "id": "documents",
+      "name": "Documentos",
+      "path": "/absolute/path/Documents",
+      "readable_roots": [],
+      "excluded_paths": [
+        "PlatformIO/Projects/PIUU_SERVER",
+        "another-project/.venv"
+      ]
     }
   ]
 }

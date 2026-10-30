@@ -83,7 +83,7 @@ perfil es experimental: verificar de nuevo después de actualizar Codex.
   creado y revisado por el usuario**. No se crean ramas ni commits automáticamente;
   la metadata Git permanece fuera del acceso del agente. Un usuario Linux dedicado
   o contenedor aporta una frontera adicional recomendable para proyectos sensibles.
-- Una tarea activa por proyecto, hasta cuatro proyectos simultáneos configurables;
+- Una tarea activa por proyecto o por raíces superpuestas (padre/hija), hasta cuatro proyectos independientes simultáneos configurables;
   cola máxima 100. Las tareas interrumpidas bloquean nuevas ejecuciones del mismo
   proyecto hasta reconciliar su resultado. No hay botón que olvide incertidumbre.
 
@@ -112,9 +112,54 @@ se leen del entorno; no hay cargador dotenv implícito. `PIUU_CODEX_ENABLED` sol
 controla las herramientas del backend, no es necesario en el gateway local.
 
 Copiar `scripts/codex-projects.example.json` a un fichero privado, sustituir las
-rutas y aplicar `chmod 600`. No autorizar todo `/home`, `/` ni todo el workspace
-con varios repositorios. Las raíces de herramientas en `readable_roots` son
+rutas y aplicar `chmod 600`. Preferir raíces específicas; no autorizar `/home` ni `/`. Una carpeta amplia
+como Documents requiere autorización explícita y exclusiones de los controles del bridge. Las raíces de herramientas en `readable_roots` son
 **solo lectura**; por ejemplo el entorno Python de PlatformIO y sus paquetes.
+
+### Carpetas personales y exclusiones
+
+También se admiten carpetas para tareas de archivos, aunque no contengan código ni
+`platformio.ini`. En la ThinkPad se autorizaron explícitamente lectura y escritura
+para los IDs `documents`, `downloads` y `music`, junto a CORE/EARS. Las rutas reales
+son Documents, Downloads y Music, respectivamente. Cada tarea trabaja dentro de
+la raíz elegida; registrar varias no concede automáticamente todas a cada tarea.
+
+Para bloquear partes de una raíz amplia, agregar `excluded_paths` en el registro:
+
+```json
+{
+  "id": "documents",
+  "name": "Documentos",
+  "path": "/absolute/path/Documents",
+  "readable_roots": [],
+  "excluded_paths": ["PlatformIO/Projects/PIUU_SERVER", "another-project/.venv"]
+}
+```
+
+Son rutas **relativas** a esa raíz, sin `..`, comodines ni la raíz `.`. Se bloquea
+lectura y escritura y no se recorre su contenido al validar enlaces. Un enlace
+externo fuera de una exclusión sigue rechazando el workspace completo. No usar
+exclusiones para ampliar acceso a destinos externos. Se omite también un
+`platformio.ini` excluido, incluido un enlace cuyo destino esté excluido.
+
+En la configuración local de Documents se excluyen el bridge completo (código,
+estado y registro que controlan el servicio) y nueve entornos `.venv` con enlaces
+que salen de Documents. La configuración personal permanece en `.state/projects.json`,
+fuera de Git. Downloads y Music no tienen esas exclusiones de subcarpetas; se
+mantienen los bloqueos habituales de secretos y el sandbox.
+
+El Codex instalado no puede montar denegaciones hijas dentro de un directorio ya
+denegado. Para raíces con exclusiones se expanden los patrones de secretos sobre
+los archivos existentes al iniciar cada tarea y se eliminan denegaciones hijas
+redundantes. Los archivos nuevos dentro de subcarpetas no se vuelven a escanear
+por cada comando; no introducir secretos nuevos durante una tarea. Las raíces
+sin exclusiones mantienen los patrones originales del perfil de Codex.
+La validación usa `scandir`, evita seguir enlaces y poda las exclusiones, para no
+hacer una llamada `stat` por cada archivo de carpetas grandes.
+
+Después de editar el JSON, validar permisos 0600 y reiniciar solamente
+`piuu-codex.service`; hacerlo con el agente inactivo porque interrumpe tareas en
+curso. El túnel y el VPS no necesitan cambios por una modificación del registro.
 
 Generar el bearer sin mostrarlo y fuera de Git:
 

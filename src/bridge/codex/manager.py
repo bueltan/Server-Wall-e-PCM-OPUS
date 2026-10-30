@@ -43,7 +43,7 @@ class TaskManager:
             for task in self.store.pending():
                 if len(self.active) >= self.concurrency:
                     break
-                if task['project'] not in blocked:
+                if not any(self.registry.overlaps(task['project'], other) for other in blocked):
                     cancel = asyncio.Event()
                     job = asyncio.create_task(self._run(task, cancel))
                     self.active[task['task_id']] = (job, cancel)
