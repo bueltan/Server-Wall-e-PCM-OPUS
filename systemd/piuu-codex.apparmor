@@ -1,0 +1,7 @@
+# Optional Ubuntu host support. Does not change the global userns restriction.
+# Install the wrapper as root-owned /usr/local/libexec/piuu-codex-bwrap first.
+abi <abi/4.0>,
+include <tunables/global>
+profile piuu-codex-sandbox /usr/local/libexec/piuu-codex-bwrap flags=(unconfined) {
+  userns,
+}

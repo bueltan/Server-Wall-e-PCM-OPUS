@@ -38,6 +38,10 @@ def calendar_server_spec(time_zone=None):
     return google_server_spec('calendar', {'PIUU_CALENDAR_TIME_ZONE': time_zone} if time_zone else None)
 
 
+def codex_server_spec():
+    return google_server_spec('codex')
+
+
 def device_server_spec(config):
     env = {key: value for key, value in os.environ.items()
            if key in ('PATH', 'HOME', 'LANG', 'PIUU_LOG_LEVEL')}

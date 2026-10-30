@@ -1,0 +1,20 @@
+[Unit]
+Description=PIUU reverse SSH task gateway tunnel
+Wants=piuu-codex.service network-online.target
+After=piuu-codex.service network-online.target
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+EnvironmentFile=%h/.config/piuu-codex/tunnel.env
+ExecStart=/bin/bash -c 'exec "$PIUU_CODEX_ROOT/scripts/piuu-codex-tunnel.sh"'
+Restart=always
+RestartSec=20
+UMask=0077
+NoNewPrivileges=yes
+StandardOutput=journal
+StandardError=journal
+ExecStopPost=/usr/bin/echo CODEX_TUNNEL_DISCONNECTED
+
+[Install]
+WantedBy=default.target

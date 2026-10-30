@@ -1,0 +1,4 @@
+#!/bin/sh
+# Root-owned optional entrypoint for Ubuntu's restricted user namespaces.
+# AppArmor attaches its narrowly scoped userns grant to this installed path.
+exec /usr/bin/bwrap "$@"

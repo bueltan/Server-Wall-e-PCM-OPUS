@@ -1,5 +1,15 @@
 # Changelog
 
+## 2026-10-30
+
+- Validate all 289 backend tests, Python/Bash syntax, dependency consistency, unit syntax and diff whitespace. Verify real Codex file editing/unittest execution through the local systemd gateway, idempotency and an actual filesystem sandbox check using disposable projects. Enable the local user services and linger; authorize a service-specific existing AppArmor runtime profile on Ubuntu while retaining mandatory runtime NoNewPrivs/private-device checks.
+
+- Add optional Gemini Codex MCP tools on a separate ToolManager: status, authorized projects, asynchronous execute, progress/result, cancellation, recent tasks and saved-context continuation. Keep audio and firmware unchanged.
+- Add authenticated loopback task gateway, private Codex App Server stdio adapter, bounded local queue, SQLite state/event history, request idempotency and conservative restart/timeout reconciliation without automatic mutation replay.
+- Apply a named restricted permission profile, canonical project/symlink validation, private configuration and bearer files, denied permission escalation, isolated command environment and per-project serialization. Expose task operations instead of raw Codex RPC over the reverse tunnel.
+- Add user systemd service templates, configurable OpenSSH reverse tunnel with strict host-key checking and paced restart, environment/project examples, bounded command evidence and durable backend event polling without audio delivery.
+- Document installation, integration, PlatformIO prerequisites, isolation limits, recovery, diagnostics and explicit real-model smoke validation in CODEX_MCP.md and README. Add mocked lifecycle/security tests plus real local MCP stdio/WebSocket coverage.
+
 ## 2026-10-29
 
 - Revalidate the captured Gemini/xAI WebSocket after acquiring the send lock so queued audio cannot move to a replacement connection. Invalidate Gemini's socket at close entry before asynchronous MCP cleanup.

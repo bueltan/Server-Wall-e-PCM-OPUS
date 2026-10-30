@@ -975,3 +975,18 @@ antes del fallo. Un fallo al abrir el puerto genera `DEVICE_WS_ERROR` con
 `phase=startup` y detiene el arranque, en lugar de ofrecer un MCP sin servicio.
 Un fallo de NVS se clasifica como `error_kind=storage` y conserva `applied=true`.
 Los logs de CORE se controlan independientemente con `PIUU_VOLUME_DIAGNOSTICS`.
+
+## Agente Codex remoto (opcional)
+
+PIUU puede asignar tareas de desarrollo por MCP a una ThinkPad con Codex sin
+VS Code, consultar progreso/resultados, cancelar y continuar contexto. La
+conectividad usa SSH inverso y un gateway local autenticado, con cola SQLite,
+idempotencia, perfiles de permisos y recuperación conservadora. Solo Gemini;
+`PIUU_CODEX_ENABLED=0` por defecto. No se modifica el protocolo de audio ni se
+expone App Server directamente.
+
+Ver [CODEX_MCP.md](CODEX_MCP.md) para instalación local/VPS, systemd, seguridad,
+PlatformIO, llamadas MCP, eventos sin audio y diagnóstico. Configuración de ejemplo
+en `.env.example` y `scripts/codex-projects.example.json`. Las tareas no hacen
+commits, push, despliegues ni flashing. Un resultado de prueba desconocido es
+`null`; no se comunica como éxito.

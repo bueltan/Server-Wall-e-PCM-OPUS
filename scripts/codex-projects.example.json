@@ -1,0 +1,16 @@
+{
+  "projects": [
+    {
+      "id": "piuu_core",
+      "name": "PIUU CORE",
+      "path": "/absolute/path/PIUU_CORE",
+      "readable_roots": []
+    },
+    {
+      "id": "piuu_ears",
+      "name": "PIUU EARS",
+      "path": "/absolute/path/C3_EARS",
+      "readable_roots": []
+    }
+  ]
+}

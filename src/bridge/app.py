@@ -10,6 +10,8 @@ from bridge.transport.udp import UdpAudioBridgeProtocol
 async def async_main() -> None:
     configure_logging()
     config = BridgeConfig()
+    if config.codex_enabled and config.voice_provider != 'gemini':
+        raise ValueError('Codex MCP currently requires Gemini')
     if config.device_mcp_enabled:
         if config.voice_provider != 'gemini':
             raise ValueError('Device MCP currently requires Gemini')
@@ -35,6 +37,7 @@ async def async_main() -> None:
 
     reminders = None
     device_gateway = None
+    codex_notifications = None
     try:
         if config.device_mcp_enabled:
             from bridge.tools.device_gateway import DeviceGateway
@@ -43,8 +46,14 @@ async def async_main() -> None:
             from bridge.notifications.calendar import CalendarReminders
             reminders = CalendarReminders(config, _protocol.session.deliver_notification)
             reminders.start()
+        if config.codex_enabled:
+            from bridge.notifications.codex import from_environment
+            codex_notifications = from_environment()
+            codex_notifications.start()
         await asyncio.Future()
     finally:
+        if codex_notifications is not None:
+            await codex_notifications.close()
         if device_gateway is not None:
             device_gateway.close()
             await device_gateway.wait_closed()

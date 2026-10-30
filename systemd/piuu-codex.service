@@ -1,0 +1,19 @@
+[Unit]
+Description=PIUU authenticated Codex gateway and local task manager
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+EnvironmentFile=%h/.config/piuu-codex/local.env
+ExecStart=/bin/bash -c 'exec "$PIUU_CODEX_ROOT/scripts/piuu-codex-start.sh"'
+Restart=always
+RestartSec=15
+UMask=0077
+# The bwrap launcher sets NoNewPrivs before exec; gateway checks it at startup.
+KillMode=control-group
+TimeoutStopSec=15
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=default.target

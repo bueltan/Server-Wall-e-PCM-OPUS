@@ -12,7 +12,7 @@ from datetime import datetime
 from zoneinfo import ZoneInfo
 import websockets
 from bridge.audio.resample import Pcm24To16
-from bridge.tools.manager import ToolManager, gmail_server_spec, calendar_server_spec, device_server_spec
+from bridge.tools.manager import ToolManager, gmail_server_spec, calendar_server_spec, device_server_spec, codex_server_spec
 from bridge.diagnostics.logging import event
 from bridge.expressions.plan import EXPRESSION_INSTRUCTIONS, TOOL_NAME, parse_plan, tool_schema
 
@@ -52,6 +52,8 @@ class GeminiLive:
         # A slow Google request must not hold up volume or mute commands.
         self.device_manager = ToolManager(
             [device_server_spec(config)] if config.device_mcp_enabled else (), config.tool_timeout_sec)
+        self.codex_manager = ToolManager(
+            [codex_server_spec()] if config.codex_enabled else (), config.tool_timeout_sec)
         self.resampler = Pcm24To16()
 
     def setup(self):
@@ -127,9 +129,17 @@ class GeminiLive:
             setup['tools'] = [{'functionDeclarations': [{
                 'name': schema['name'], 'description': schema['description'],
                 'parametersJsonSchema': schema['parameters'], 'behavior': 'BLOCKING'}]}]
-        declarations = self.tool_manager.declarations + self.device_manager.declarations
+        declarations = self.tool_manager.declarations + self.device_manager.declarations + self.codex_manager.declarations
         if declarations:
             setup.setdefault('tools', [{'functionDeclarations': []}])[0]['functionDeclarations'].extend(declarations)
+        if self.config.codex_enabled:
+            setup['systemInstruction']['parts'][0]['text'] += (
+                "\nUse Codex tools only for the user's requested development work. "
+                "List projects to resolve authorized project IDs. Use a unique idempotency_key "
+                "per new request and preserve it on retries after network loss. Queued means assigned, "
+                "not completed. Consult task_status/task_result; never infer success from a disconnect. "
+                "Null test/build results mean unknown. Keep spoken responses short in Spanish. "
+                "Never commit, push, deploy or flash through these tools.")
         return {'setup': setup}
 
     async def connect(self):
@@ -141,6 +151,8 @@ class GeminiLive:
             await self.tool_manager.start()
         if self.device_manager.servers:
             await self.device_manager.start()
+        if self.codex_manager.servers:
+            await self.codex_manager.start()
         self.pause_count = 0
         self.history_ready.set()
         self.token = self.last_token = None
@@ -228,7 +240,8 @@ class GeminiLive:
 
     async def _mcp_call(self, cid, name, args, token):
         try:
-            manager = self.device_manager if name in self.device_manager.routes else self.tool_manager
+            manager = (self.device_manager if name in self.device_manager.routes else
+                       self.codex_manager if name in self.codex_manager.routes else self.tool_manager)
             result = await manager.call(name, args, token)
             if self.pending_tools.get(cid) is not asyncio.current_task():
                 return
@@ -305,10 +318,12 @@ class GeminiLive:
                 continue
             if len(self.calls) + len(self.pending_tools) >= 8:
                 raise ValueError('too_many_tool_calls')
-            if (name in self.tool_manager.routes or name in self.device_manager.routes) and self.valid(token):
+            if (name in self.tool_manager.routes or name in self.device_manager.routes or name in self.codex_manager.routes) and self.valid(token):
                 write_errors = {'gmail_send_message': 'send_not_confirmed',
                                 'calendar_create_event': 'calendar_write_not_confirmed',
                                 'gmail_create_contact': 'contact_create_not_confirmed'}
+                if name in ('codex_execute', 'codex_continue', 'codex_cancel'):
+                    write_errors[name] = 'codex_result_not_confirmed'
                 if name.startswith('device_') and name != 'device_get_volume':
                     write_errors[name] = 'volume_not_confirmed'
                 if name in write_errors:
@@ -453,6 +468,7 @@ class GeminiLive:
             await asyncio.gather(*tasks, return_exceptions=True)
         await self.tool_manager.close()
         await self.device_manager.close()
+        await self.codex_manager.close()
         if ws is not None:
             try:
                 await asyncio.wait_for(ws.close(), 2)
