@@ -2,6 +2,10 @@
 
 ## 2026-10-30
 
+- Bound task-manager shutdown and use cancellation-safe timeout contexts around Codex queue/event waits on Python 3.11. Add a shutdown regression; pass all 290 local backend tests and all 31 Codex tests on the VPS runtime.
+- Verify real VPS MCP discovery, task execution, unittest results, saved-thread continuation, cancellation, automatic reverse-tunnel reconnection during an active 40-second task, persistent results and idempotent retries. Confirm completed history survives a gateway restart.
+- Record the remaining remote full-suite timeout in the pre-existing ingress coordination test, reproduced independently on baseline 7256ef2 under Python 3.11. Keep audio implementation unchanged; full local Python 3.12 suite passes.
+
 - Validate all 289 backend tests, Python/Bash syntax, dependency consistency, unit syntax and diff whitespace. Verify real Codex file editing/unittest execution through the local systemd gateway, idempotency and an actual filesystem sandbox check using disposable projects. Enable the local user services and linger; authorize a service-specific existing AppArmor runtime profile on Ubuntu while retaining mandatory runtime NoNewPrivs/private-device checks.
 
 - Add optional Gemini Codex MCP tools on a separate ToolManager: status, authorized projects, asynchronous execute, progress/result, cancellation, recent tasks and saved-context continuation. Keep audio and firmware unchanged.

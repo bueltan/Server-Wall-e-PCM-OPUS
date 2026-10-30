@@ -361,3 +361,31 @@ PYTHONPATH=src .venv/bin/python scripts/piuu-codex-smoke.py
 La aceptación física de reinicio de Linux y pérdida real de Wi-Fi requiere pruebas
 operativas adicionales; las pruebas de reconexión simulada no equivalen a apagar
 el equipo. La voz y la compilación de cada firmware deben comprobarse por separado.
+
+### Resultados de la validación de esta versión
+
+- Python 3.12 local: **290 tests** completos aprobados; compilación de sintaxis
+  Python/Bash, pip check, systemd-analyze y revisión de diff aprobadas.
+- Python 3.11 del VPS: **31 tests Codex** aprobados. La suite completa remota
+  no pudo terminar: se bloquea en
+  `test_ingress.InboundTests.test_coordination_pause_does_not_consume_send_timeout`.
+  El mismo bloqueo se reprodujo en una copia del commit anterior `7256ef2` con
+  timeout de 20 segundos; el intento completo actualizado se detuvo a los 120
+  segundos. No se cambió audio para resolver un problema ajeno a esta integración.
+- App Server real: edición y unittest en proyectos temporales, aislamiento con
+  archivos señuelo y metadata Git de solo lectura.
+- Servicio real local: gateway y túnel activos/habilitados, linger activado, historial
+  SQLite preservado al reiniciar.
+- MCP real desde VPS: ocho herramientas descubiertas, tarea creada/resultados
+  recuperados y reintentos deduplicados. Una continuación conservó el thread y
+  siguió ejecutándose durante un corte intencional del túnel; completó la espera
+  de 40 segundos y sus pruebas después de la reconexión automática.
+- Cancelación real confirmada de un comando de espera, sin esperar los 120 segundos
+  solicitados por la prueba. Ninguna prueba modificó los proyectos de firmware.
+
+Siguen pendientes las pruebas de voz con PIUU, compilaciones concretas de los
+firmwares autorizados, reinicio físico de Linux/VPS y pérdida física de Wi-Fi.
+No equivalen a los tests de transporte y reinicio de servicio ejecutados. La
+restricción de la clave SSH dedicada descrita arriba requiere un usuario/clave
+separados; no se modificó la configuración SSH global ni la clave administrativa
+existente durante estas pruebas.

@@ -34,7 +34,7 @@ class TaskManager:
 
     async def _loop(self):
         next_reconcile = 0
-        while True:
+        while not self.stopping:
             if time.monotonic() >= next_reconcile:
                 await self.reconcile()
                 next_reconcile = time.monotonic() + 30
@@ -50,7 +50,8 @@ class TaskManager:
                     blocked.add(task['project'])
             self.wakeup.clear()
             try:
-                await asyncio.wait_for(self.wakeup.wait(), .5)
+                async with asyncio.timeout(.5):
+                    await self.wakeup.wait()
             except TimeoutError:
                 pass
 

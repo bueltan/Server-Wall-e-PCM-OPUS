@@ -202,7 +202,8 @@ class CodexAdapter:
                     await server.rpc('turn/interrupt', {'threadId': thread_id, 'turnId': turn_id})
                     interrupted = True
                 try:
-                    message = await asyncio.wait_for(server.notifications.get(), .25)
+                    async with asyncio.timeout(.25):
+                        message = await server.notifications.get()
                 except TimeoutError:
                     if server.reader.done():
                         raise ConnectionError('codex_disconnected')

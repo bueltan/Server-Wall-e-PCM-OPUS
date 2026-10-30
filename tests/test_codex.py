@@ -195,6 +195,15 @@ class TaskTests(Fixture):
         self.adapter.online = True
         self.assertTrue((await self.manager.dispatch('status', {}))['connected'])
 
+    async def test_shutdown_after_completion_is_bounded(self):
+        task = await self.enqueue()
+        self.adapter.release.set()
+        self.manager.start()
+        await self.wait_status(task['task_id'], 'completed')
+        async with asyncio.timeout(1):
+            await self.manager.close()
+        self.assertTrue(self.manager.worker.done())
+
     async def test_invalid_requests(self):
         for operation, args in [
             ('execute', dict(project='../outside', instruction='x', idempotency_key='x')),
